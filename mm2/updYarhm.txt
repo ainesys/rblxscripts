@@ -1,4 +1,4 @@
--- Yet Another Random Hub Menu 1.21.6 by Aetherion
+-- AineHub 1.21.6 (Custom Mobile Edition)
 -- Build Number: 40
 -- Build Date: 2026-09-29T02:35:21Z
 
@@ -8,7 +8,7 @@
 
 if not game:IsLoaded() then
 	game:GetService("StarterGui"):SetCore("SendNotification", {
-		Title = "Script loading",
+		Title = "AineHub Loading",
 		Text = "Waiting for the game to finish loading!",
 		Duration = 5
 	})
@@ -1000,7 +1000,7 @@ Converted["_HubCredits"].Name = "HubCredits"
 Converted["_HubCredits"].Parent = Converted["_Menu"]
 
 Converted["_HubDesc"].Font = Enum.Font.GothamBold
-Converted["_HubDesc"].Text = "yet another random hub menu"
+Converted["_HubDesc"].Text = "AineHub"
 Converted["_HubDesc"].TextColor3 = Color3.fromRGB(255, 255, 255)
 Converted["_HubDesc"].TextSize = 14
 Converted["_HubDesc"].TextWrapped = true
@@ -4510,7 +4510,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 	
 	table.insert(module, {
 		Type = "Button",
-		Args = {"Hide YARHM", function(Self)
+		Args = {"Hide AineHub", function(Self)
 			if uis.KeyboardEnabled then
 				ts:Create(script.Parent.Menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					Scale = 0
@@ -4524,7 +4524,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 				hidden=true
 				fu.notification("Shake your device to bring back the menu.")
 			else
-				fu.notification("Can't hide YARHM!") -- how else are you gonna open???
+				fu.notification("Can't hide AineHub!") -- how else are you gonna open???
 			end
 		end,}
 	}
@@ -4918,7 +4918,9 @@ local function BPADER_routine() -- Routine: StarterGui.YARHM.Init
 		game.Loaded:Wait()
 	end
 	
-	--func.notification("Welcome to YARHM Nebula.")
+	pcall(function()
+		func.notification("Welcome to AineHub!")
+	end)
 	script.Parent.Menu.HubName.Text = script.Parent.Menu.HubName.Text .. `<font transparency="0.8" size="5">{func.__v}</font>`
 	
 	ts:Create(script.Parent.Menu, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
