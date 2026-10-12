@@ -5576,6 +5576,14 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		end
 		return nil
 	end
+
+	if getgenv then
+		getgenv().YARHM_findMurderer = findMurderer
+		getgenv().YARHM_findSheriff = findSheriff
+		getgenv().YARHM_findSheriffThatsNotMe = findSheriffThatsNotMe
+		getgenv().YARHM_miniFling = miniFling
+		getgenv().YARHM_getMap = getMap
+	end
 	
 	
 	
@@ -8108,53 +8116,89 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end
 	menu.CanvasGroup.Opener.MouseButton1Click:Connect(openMenu)
 
-	-- ===== CUSTOM: Shoot Murd quick-button (right side, visible when minimized) =====
-	local shootMurdBtn = Instance.new("TextButton")
-	shootMurdBtn.Name = "ShootMurdQuickBtn"
-	shootMurdBtn.Text = "Shoot\nMurd"
-	shootMurdBtn.Font = Enum.Font.GothamBold
-	shootMurdBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	shootMurdBtn.TextScaled = true
-	shootMurdBtn.TextWrapped = true
-	shootMurdBtn.BackgroundColor3 = Color3.fromRGB(197, 0, 0)
-	shootMurdBtn.BorderSizePixel = 0
-	shootMurdBtn.AnchorPoint = Vector2.new(1, 0.5)
-	shootMurdBtn.Position = UDim2.new(1, -15, 0.5, 0)
-	shootMurdBtn.Size = UDim2.fromOffset(65, 65)
-	shootMurdBtn.Visible = false
-	shootMurdBtn.ZIndex = 999
-	shootMurdBtn.ClipsDescendants = true
-	shootMurdBtn.AutoButtonColor = false
-	shootMurdBtn.Parent = menu.Parent -- Parent directly to ScreenGui for global screen docking
-
-	local _shootBtnCorner = Instance.new("UICorner", shootMurdBtn)
-	_shootBtnCorner.CornerRadius = UDim.new(1, 0)
-
-	local _shootBtnStroke = Instance.new("UIStroke", shootMurdBtn)
-	_shootBtnStroke.Color = Color3.fromRGB(255, 255, 255)
-	_shootBtnStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	_shootBtnStroke.Thickness = 2
-
-	local _shootBtnPad = Instance.new("UIPadding", shootMurdBtn)
-	_shootBtnPad.PaddingBottom = UDim.new(0, 5)
-	_shootBtnPad.PaddingTop = UDim.new(0, 5)
-	_shootBtnPad.PaddingLeft = UDim.new(0, 5)
-	_shootBtnPad.PaddingRight = UDim.new(0, 5)
-
-	local _shootBtnScale = Instance.new("UIScale", shootMurdBtn)
-	_shootBtnScale.Scale = 1
-
+	-- ===== CUSTOM: Quick Action Buttons (Shoot Murd, Grab Gun, Fling Murd) =====
 	local ts2 = game:GetService("TweenService")
-	shootMurdBtn.MouseButton1Down:Connect(function()
-		ts2:Create(_shootBtnScale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.88 }):Play()
-	end)
-	shootMurdBtn.MouseButton1Up:Connect(function()
-		ts2:Create(_shootBtnScale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-	end)
+	local screenGui = menu.Parent
 
-	local function quickShootMurd()
+	local function makeQuickButton(name, text, bgColor, pos, anchor, size)
+		local btn = Instance.new("TextButton")
+		btn.Name = name
+		btn.Text = text
+		btn.Font = Enum.Font.GothamBold
+		btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+		btn.TextScaled = true
+		btn.TextWrapped = true
+		btn.BackgroundColor3 = bgColor
+		btn.BorderSizePixel = 0
+		btn.AnchorPoint = anchor
+		btn.Position = pos
+		btn.Size = size
+		btn.Visible = false
+		btn.ZIndex = 999
+		btn.ClipsDescendants = true
+		btn.AutoButtonColor = false
+		btn.Parent = screenGui
+
+		local corner = Instance.new("UICorner", btn)
+		corner.CornerRadius = UDim.new(1, 0)
+
+		local stroke = Instance.new("UIStroke", btn)
+		stroke.Color = Color3.fromRGB(255, 255, 255)
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Thickness = 2
+
+		local pad = Instance.new("UIPadding", btn)
+		pad.PaddingBottom = UDim.new(0, 5)
+		pad.PaddingTop = UDim.new(0, 5)
+		pad.PaddingLeft = UDim.new(0, 5)
+		pad.PaddingRight = UDim.new(0, 5)
+
+		local scale = Instance.new("UIScale", btn)
+		scale.Scale = 0
+
+		btn.MouseButton1Down:Connect(function()
+			ts2:Create(scale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.88 }):Play()
+		end)
+		btn.MouseButton1Up:Connect(function()
+			ts2:Create(scale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		end)
+
+		return btn, scale
+	end
+
+	-- 1. Grab Gun Button (Top-Left)
+	local grabGunBtn, grabGunScale = makeQuickButton(
+		"GrabGunQuickBtn",
+		"Grab\nGun",
+		Color3.fromRGB(0, 140, 90),
+		UDim2.new(0, 20, 0, 60),
+		Vector2.new(0, 0),
+		UDim2.fromOffset(60, 60)
+	)
+
+	-- 2. Fling Murd Button (To the right of Grab Gun)
+	local flingMurdBtn, flingMurdScale = makeQuickButton(
+		"FlingMurdQuickBtn",
+		"Fling\nMurd",
+		Color3.fromRGB(200, 85, 0),
+		UDim2.new(0, 90, 0, 60),
+		Vector2.new(0, 0),
+		UDim2.fromOffset(60, 60)
+	)
+
+	-- 3. Shoot Murd Button (Right side)
+	local shootMurdBtn, shootMurdScale = makeQuickButton(
+		"ShootMurdQuickBtn",
+		"Shoot\nMurd",
+		Color3.fromRGB(197, 0, 0),
+		UDim2.new(1, -15, 0.5, 0),
+		Vector2.new(1, 0.5),
+		UDim2.fromOffset(65, 65)
+	)
+
+	local function getNotify()
 		local fu2 = (getgenv and getgenv().YARHMFUNCTIONS) or nil
-		local notify = function(msg)
+		return function(msg)
 			if fu2 and fu2.notification then
 				fu2.notification(msg)
 			else
@@ -8167,11 +8211,22 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				end)
 			end
 		end
+	end
 
+	-- Handlers
+	local lastShoot = 0
+	local function onShootClick()
+		if tick() - lastShoot < 0.25 then return end
+		lastShoot = tick()
+		local notify = getNotify()
 		local lp = game:GetService("Players").LocalPlayer
 		if not lp then return end
 
 		local function findSheriff2()
+			if getgenv and getgenv().YARHM_findSheriff then
+				local s = getgenv().YARHM_findSheriff()
+				if s then return s end
+			end
 			for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
 				local char = plr.Character
 				if char and char:FindFirstChild("Gun") then return plr end
@@ -8179,13 +8234,21 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 
 		local function findMurderer2()
+			if getgenv and getgenv().YARHM_findMurderer then
+				local m = getgenv().YARHM_findMurderer()
+				if m then return m end
+			end
 			for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
 				local char = plr.Character
-				if char and char:FindFirstChild("Knife") then return plr end
+				if (char and char:FindFirstChild("Knife")) or (plr.Backpack and plr.Backpack:FindFirstChild("Knife")) then return plr end
 			end
 		end
 
 		local function findSheriffThatsNotMe2()
+			if getgenv and getgenv().YARHM_findSheriffThatsNotMe then
+				local s = getgenv().YARHM_findSheriffThatsNotMe()
+				if s then return s end
+			end
 			for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
 				local char = plr.Character
 				if char and char:FindFirstChild("Gun") and plr ~= lp then return plr end
@@ -8199,7 +8262,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 
 		local murderer = findMurderer2() or findSheriffThatsNotMe2()
 		if not murderer then
-			notify("No murderer (or sheriff) to shoot.")
+			notify("No murderer to shoot.")
 			return
 		end
 
@@ -8240,28 +8303,167 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end
 
-	shootMurdBtn.MouseButton1Click:Connect(quickShootMurd)
+	local lastGrab = 0
+	local function onGrabGunClick()
+		if tick() - lastGrab < 0.3 then return end
+		lastGrab = tick()
+		local notify = getNotify()
+		local lp = game:GetService("Players").LocalPlayer
+		local char = lp and lp.Character
+		local rootPart = char and char:FindFirstChild("HumanoidRootPart")
+		if not rootPart then
+			notify("Character not found.")
+			return
+		end
+
+		local gunDrop = nil
+		if getgenv and getgenv().YARHM_getMap then
+			local map = getgenv().YARHM_getMap()
+			if map then gunDrop = map:FindFirstChild("GunDrop") end
+		end
+		if not gunDrop then
+			for _, obj in ipairs(workspace:GetChildren()) do
+				if obj:FindFirstChild("CoinContainer") and obj:FindFirstChild("Spawns") then
+					gunDrop = obj:FindFirstChild("GunDrop")
+					break
+				end
+			end
+		end
+		if not gunDrop then
+			gunDrop = workspace:FindFirstChild("GunDrop", true)
+		end
+
+		if not gunDrop then
+			notify("No dropped gun found.")
+			return
+		end
+
+		notify("Grabbing dropped gun...")
+		local touchPart = gunDrop:FindFirstChild("Handle") or gunDrop
+		local prevPos = char:GetPivot()
+
+		-- Method 1: Bring gun to player & firetouchinterest
+		pcall(function()
+			if firetouchinterest and touchPart then
+				gunDrop:PivotTo(rootPart.CFrame)
+				firetouchinterest(rootPart, touchPart, 0)
+				task.wait()
+				firetouchinterest(rootPart, touchPart, 1)
+			end
+		end)
+
+		-- Method 2: Fast teleport pickup and return
+		task.spawn(function()
+			task.wait(0.08)
+			if not lp.Backpack:FindFirstChild("Gun") and not char:FindFirstChild("Gun") then
+				pcall(function()
+					char:PivotTo(gunDrop:GetPivot())
+					task.wait(0.2)
+					char:PivotTo(prevPos)
+				end)
+			end
+		end)
+	end
+
+	local lastFling = 0
+	local function onFlingMurdClick()
+		if tick() - lastFling < 0.5 then return end
+		lastFling = tick()
+		local notify = getNotify()
+		local lp = game:GetService("Players").LocalPlayer
+		local murd = nil
+
+		if getgenv and getgenv().YARHM_findMurderer then
+			murd = getgenv().YARHM_findMurderer()
+		end
+		if not murd then
+			for _, v in ipairs(game:GetService("Players"):GetPlayers()) do
+				if v ~= lp then
+					if (v.Character and v.Character:FindFirstChild("Knife")) or (v.Backpack and v.Backpack:FindFirstChild("Knife")) then
+						murd = v
+						break
+					end
+				end
+			end
+		end
+
+		if not murd then
+			notify("No murderer found to fling.")
+			return
+		end
+
+		notify("Flinging murderer (" .. murd.DisplayName .. ")...")
+
+		if getgenv and getgenv().YARHM_miniFling then
+			getgenv().YARHM_miniFling(murd)
+		else
+			-- Fallback fling
+			task.spawn(function()
+				local char = lp and lp.Character
+				local root = char and char:FindFirstChild("HumanoidRootPart")
+				local targetChar = murd.Character
+				local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+				if root and targetRoot then
+					local oldPos = root.CFrame
+					local bv = Instance.new("BodyVelocity")
+					bv.Velocity = Vector3.new(9e7, 9e7, 9e7)
+					bv.MaxForce = Vector3.new(1/0, 1/0, 1/0)
+					bv.Parent = root
+					local t0 = tick()
+					while tick() - t0 < 1.5 and targetRoot and targetRoot.Parent do
+						root.CFrame = targetRoot.CFrame
+						task.wait()
+					end
+					bv:Destroy()
+					root.Velocity = Vector3.new(0, 0, 0)
+					root.CFrame = oldPos
+				end
+			end)
+		end
+	end
+
+	-- Connect clicks
+	shootMurdBtn.MouseButton1Click:Connect(onShootClick)
+	shootMurdBtn.Activated:Connect(onShootClick)
+
+	grabGunBtn.MouseButton1Click:Connect(onGrabGunClick)
+	grabGunBtn.Activated:Connect(onGrabGunClick)
+
+	flingMurdBtn.MouseButton1Click:Connect(onFlingMurdClick)
+	flingMurdBtn.Activated:Connect(onFlingMurdClick)
 
 	-- Sync visibility smoothly with minimized state
-	local _shootBtnVisible = false
-	local function updateShootBtnVisibility()
-		-- Minimized state is indicated by OpenerDraggable or menu.CanvasGroup.Visible
+	local _quickBtnsVisible = false
+	local function updateQuickBtnsVisibility()
 		local shouldShow = (OpenerDraggable == true) or (menu.CanvasGroup and menu.CanvasGroup.Visible == true)
-		if shouldShow ~= _shootBtnVisible then
-			_shootBtnVisible = shouldShow
+		if shouldShow ~= _quickBtnsVisible then
+			_quickBtnsVisible = shouldShow
+			local btns = {
+				{btn = grabGunBtn, sc = grabGunScale},
+				{btn = flingMurdBtn, sc = flingMurdScale},
+				{btn = shootMurdBtn, sc = shootMurdScale}
+			}
 			if shouldShow then
-				shootMurdBtn.Visible = true
-				ts2:Create(_shootBtnScale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+				for _, item in ipairs(btns) do
+					item.btn.Visible = true
+					ts2:Create(item.sc, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+				end
 			else
-				ts2:Create(_shootBtnScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0 }):Play()
+				for _, item in ipairs(btns) do
+					ts2:Create(item.sc, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0 }):Play()
+				end
 				task.delay(0.15, function()
-					if not _shootBtnVisible then shootMurdBtn.Visible = false end
+					if not _quickBtnsVisible then
+						for _, item in ipairs(btns) do
+							item.btn.Visible = false
+						end
+					end
 				end)
 			end
 		end
 	end
 
-	RunService.Heartbeat:Connect(updateShootBtnVisibility)
+	RunService.Heartbeat:Connect(updateQuickBtnsVisibility)
 	-- ===== END CUSTOM =====
 	UserInputService.InputBegan:Connect(function(inp, proc)
 		if proc then return end
