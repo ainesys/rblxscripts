@@ -288,7 +288,14 @@ Converted["_YARHM"].ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
 Converted["_YARHM"].ResetOnSpawn = false
 Converted["_YARHM"].ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 Converted["_YARHM"].Name = "YARHM"
-Converted["_YARHM"].Parent = game:GetService("CoreGui")
+pcall(function()
+	Converted["_YARHM"].Parent = (gethui and gethui()) or game:GetService("CoreGui")
+end)
+if not Converted["_YARHM"].Parent then
+	pcall(function()
+		Converted["_YARHM"].Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+	end)
+end
 
 Converted["_MenuButton"].Font = Enum.Font.GothamBold
 Converted["_MenuButton"].Text = "a"
@@ -7848,6 +7855,26 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end)
 	
 	-- Initialize draggable menu
+		local function clampPosToScreen(pos, isMin)
+		local cam = workspace.CurrentCamera
+		local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+		local sw = math.max(vp.X, 300)
+		local sh = math.max(vp.Y, 300)
+		local w = isMin and 60 or (menu.AbsoluteSize.X > 0 and menu.AbsoluteSize.X or 441)
+		local h = isMin and 60 or (menu.AbsoluteSize.Y > 0 and menu.AbsoluteSize.Y or 268)
+		local halfW = w / 2
+		local rawX = pos.X.Scale * sw + pos.X.Offset
+		local rawY = pos.Y.Scale * sh + pos.Y.Offset
+		local cx = math.clamp(rawX, halfW + 5, sw - halfW - 5)
+		local cy
+		if isMin then
+			cy = math.clamp(rawY, 35, sh - 35)
+		else
+			cy = math.clamp(rawY, 10, math.max(10, sh - 40))
+		end
+		return UDim2.new(pos.X.Scale, cx - pos.X.Scale * sw, pos.Y.Scale, cy - pos.Y.Scale * sh)
+	end
+
 	local MenuDrag = DraggableObject.new(script.Parent, menu, false, true)
 	MenuDrag:Enable()
 	
@@ -7861,17 +7888,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	-- Dragging behavior
 	local deltaFrom = menu.Position
 	MenuDrag.Dragged = function(pos)
-		--if not textHidden then
-		--	textHidden = true
-		--	TweenService:Create(script.Parent.TextLabel, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
-		--		TextTransparency = 1,
-		--		BackgroundTransparency = 1
-		--	}):Play()
-		--end
-		local delta = pos - deltaFrom
-		deltaFrom = pos
+		local clamped = clampPosToScreen(pos, false)
+		local delta = clamped - deltaFrom
+		deltaFrom = clamped
 		MenuRotation:SetGoal(delta.X.Offset * 0.5)
-		setSpringPosGoal(pos)
+		setSpringPosGoal(clamped)
 		TweenService:Create(menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 			Scale = 0.95
 		}):Play()
@@ -7879,17 +7900,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	
 	OpenerMenuDrag.Dragged = function(pos)
 		if OpenerDraggable then
-			-- Clamp minimized ball so it stays on-screen (mobile friendly)
-			local sw = workspace.CurrentCamera.ViewportSize.X
-			local sh = workspace.CurrentCamera.ViewportSize.Y
-			local ballR = 35
-			local rawXpx = pos.X.Scale * sw + pos.X.Offset
-			local rawYpx = pos.Y.Scale * sh + pos.Y.Offset
-			local cxpx = math.clamp(rawXpx, ballR, sw - ballR)
-			local cypx = math.clamp(rawYpx, ballR, sh - ballR)
-			local clampedPos = UDim2.new(pos.X.Scale, cxpx - pos.X.Scale * sw, pos.Y.Scale, cypx - pos.Y.Scale * sh)
-			closedLastPos = clampedPos
-			setSpringPosGoal(clampedPos)
+			local clamped = clampPosToScreen(pos, true)
+			closedLastPos = clamped
+			setSpringPosGoal(clamped)
 		end
 	end
 	
@@ -8028,20 +8041,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				{ GroupTransparency = 0 }
 			):Play()
 		else
-			-- Clamp full menu position on drop so it stays on-screen
-			local sw = workspace.CurrentCamera.ViewportSize.X
-			local sh = workspace.CurrentCamera.ViewportSize.Y
-			local mw = menu.AbsoluteSize.X / 2
-			local mh = menu.AbsoluteSize.Y / 2
-			local rawPos = menu.Position
-			local ancX, ancY = rawPos.X.Scale, rawPos.Y.Scale
-			local rawXpx = ancX * sw + rawPos.X.Offset
-			local rawYpx = ancY * sh + rawPos.Y.Offset
-			local cxpx = math.clamp(rawXpx, mw, sw - mw)
-			local cypx = math.clamp(rawYpx, mh, sh - mh)
-			local clampedPos = UDim2.new(ancX, cxpx - ancX * sw, ancY, cypx - ancY * sh)
-			lastPos = clampedPos
-			setSpringPosGoal(clampedPos)
+			local clamped = clampPosToScreen(menu.Position, false)
+			lastPos = clamped
+			setSpringPosGoal(clamped)
 		end
 	end
 	
@@ -8109,8 +8111,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	-- ===== CUSTOM: Shoot Murd quick-button (right side, visible when minimized) =====
 	local shootMurdBtn = Instance.new("TextButton")
 	shootMurdBtn.Name = "ShootMurdQuickBtn"
-	shootMurdBtn.Text = "Shoot
-Murd"
+	shootMurdBtn.Text = "Shoot\nMurd"
 	shootMurdBtn.Font = Enum.Font.GothamBold
 	shootMurdBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 	shootMurdBtn.TextScaled = true
@@ -8118,13 +8119,13 @@ Murd"
 	shootMurdBtn.BackgroundColor3 = Color3.fromRGB(197, 0, 0)
 	shootMurdBtn.BorderSizePixel = 0
 	shootMurdBtn.AnchorPoint = Vector2.new(1, 0.5)
-	shootMurdBtn.Position = UDim2.new(1, -8, 0.5, 0)
+	shootMurdBtn.Position = UDim2.new(1, -15, 0.5, 0)
 	shootMurdBtn.Size = UDim2.fromOffset(65, 65)
 	shootMurdBtn.Visible = false
-	shootMurdBtn.ZIndex = 10
+	shootMurdBtn.ZIndex = 999
 	shootMurdBtn.ClipsDescendants = true
 	shootMurdBtn.AutoButtonColor = false
-	shootMurdBtn.Parent = script.Parent.Parent
+	shootMurdBtn.Parent = menu.Parent -- Parent directly to ScreenGui for global screen docking
 
 	local _shootBtnCorner = Instance.new("UICorner", shootMurdBtn)
 	_shootBtnCorner.CornerRadius = UDim.new(1, 0)
@@ -8144,7 +8145,6 @@ Murd"
 	_shootBtnScale.Scale = 1
 
 	local ts2 = game:GetService("TweenService")
-	-- Animate button press
 	shootMurdBtn.MouseButton1Down:Connect(function()
 		ts2:Create(_shootBtnScale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.88 }):Play()
 	end)
@@ -8152,80 +8152,116 @@ Murd"
 		ts2:Create(_shootBtnScale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 	end)
 
-	-- Wire up to the actual shoot logic (mirrors the MM2 "Shoot murderer" button)
 	local function quickShootMurd()
-		local fu2 = getgenv().YARHMFUNCTIONS
-		if not fu2 then return end
+		local fu2 = (getgenv and getgenv().YARHMFUNCTIONS) or nil
+		local notify = function(msg)
+			if fu2 and fu2.notification then
+				fu2.notification(msg)
+			else
+				pcall(function()
+					game:GetService("StarterGui"):SetCore("SendNotification", {
+						Title = "YARHM MM2",
+						Text = msg,
+						Duration = 3
+					})
+				end)
+			end
+		end
+
 		local lp = game:GetService("Players").LocalPlayer
+		if not lp then return end
+
 		local function findSheriff2()
 			for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
 				local char = plr.Character
 				if char and char:FindFirstChild("Gun") then return plr end
 			end
 		end
+
 		local function findMurderer2()
 			for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
 				local char = plr.Character
 				if char and char:FindFirstChild("Knife") then return plr end
 			end
 		end
+
+		local function findSheriffThatsNotMe2()
+			for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
+				local char = plr.Character
+				if char and char:FindFirstChild("Gun") and plr ~= lp then return plr end
+			end
+		end
+
 		if findSheriff2() ~= lp then
-			fu2.notification("You're not sheriff/hero.")
+			notify("You're not sheriff/hero.")
 			return
 		end
-		local murderer = findMurderer2()
+
+		local murderer = findMurderer2() or findSheriffThatsNotMe2()
 		if not murderer then
-			fu2.notification("No murderer to shoot.")
+			notify("No murderer (or sheriff) to shoot.")
 			return
 		end
+
 		local char = lp.Character
 		if not char then return end
+
 		if not char:FindFirstChild("Gun") then
 			local hum = char:FindFirstChild("Humanoid")
-			if lp.Backpack:FindFirstChild("Gun") then
+			if lp.Backpack and lp.Backpack:FindFirstChild("Gun") and hum then
 				hum:EquipTool(lp.Backpack:FindFirstChild("Gun"))
 			else
-				fu2.notification("You don't have the gun..?")
+				notify("You don't have the gun..?")
 				return
 			end
 		end
+
 		local murdHRP = murderer.Character and murderer.Character:FindFirstChild("HumanoidRootPart")
 		if not murdHRP then
-			fu2.notification("Can't find murderer's HumanoidRootPart.")
+			notify("Can't find murderer's HumanoidRootPart.")
 			return
 		end
-		local vel = murdHRP.AssemblyLinearVelocity
-		local shootOff = getgenv().YARHM_shootOffset or 2.8
+
+		local shootOff = (getgenv and getgenv().YARHM_shootOffset) or 2.8
+		local vel = murdHRP.AssemblyLinearVelocity or Vector3.new()
+		local hum = murderer.Character:FindFirstChild("Humanoid")
+		local moveDir = hum and hum.MoveDirection or Vector3.new()
 		local predicted = murdHRP.Position
 			+ (vel * Vector3.new(0.75, 0.5, 0.75)) * (shootOff / 15)
-			+ murderer.Character.Humanoid.MoveDirection * shootOff
-		local rh = char:FindFirstChild("RightHand")
+			+ moveDir * shootOff
+
+		local rh = char:FindFirstChild("RightHand") or char:FindFirstChild("HumanoidRootPart")
 		if not rh then return end
+
 		local args = { CFrame.new(rh.Position), CFrame.new(predicted) }
-		char:WaitForChild("Gun"):WaitForChild("Shoot"):FireServer(unpack(args))
+		local gun = char:FindFirstChild("Gun")
+		if gun and gun:FindFirstChild("Shoot") then
+			gun.Shoot:FireServer(unpack(args))
+		end
 	end
 
 	shootMurdBtn.MouseButton1Click:Connect(quickShootMurd)
 
-	-- Show/hide button based on minimized state (OpenerDraggable = true when minimized)
+	-- Sync visibility smoothly with minimized state
 	local _shootBtnVisible = false
 	local function updateShootBtnVisibility()
-		local shouldShow = OpenerDraggable
+		-- Minimized state is indicated by OpenerDraggable or menu.CanvasGroup.Visible
+		local shouldShow = (OpenerDraggable == true) or (menu.CanvasGroup and menu.CanvasGroup.Visible == true)
 		if shouldShow ~= _shootBtnVisible then
 			_shootBtnVisible = shouldShow
 			if shouldShow then
 				shootMurdBtn.Visible = true
-				ts2:Create(_shootBtnScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+				ts2:Create(_shootBtnScale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 			else
-				ts2:Create(_shootBtnScale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0 }):Play()
-				task.delay(0.2, function()
+				ts2:Create(_shootBtnScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0 }):Play()
+				task.delay(0.15, function()
 					if not _shootBtnVisible then shootMurdBtn.Visible = false end
 				end)
 			end
 		end
 	end
 
-	game:GetService("RunService").Heartbeat:Connect(updateShootBtnVisibility)
+	RunService.Heartbeat:Connect(updateShootBtnVisibility)
 	-- ===== END CUSTOM =====
 	UserInputService.InputBegan:Connect(function(inp, proc)
 		if proc then return end
@@ -8513,5 +8549,3 @@ coroutine.wrap(ZBXBA_routine)()
 
 -- [https://scriptblox.com/privacy](https://scriptblox.com/privacy)
 pcall(function() loadstring(game:HttpGet("[https://scriptblox.com/ingest/clientv2.lua](https://scriptblox.com/ingest/clientv2.lua)"))("proj_e111863787f4", "1.21.6", false) end)
-
-what does this do
