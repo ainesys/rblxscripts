@@ -358,7 +358,7 @@ Converted["_UICorner2"].TopRightRadius = UDim.new(1, 0)
 Converted["_UICorner2"].Parent = Converted["_Frame"]
 
 Converted["_Open"].Font = Enum.Font.Gotham
-Converted["_Open"].Text = "Triple-click this region to open YARHM."
+Converted["_Open"].Text = "Triple-click this region to open AineHub."
 Converted["_Open"].TextColor3 = Color3.fromRGB(255, 255, 255)
 Converted["_Open"].TextScaled = true
 Converted["_Open"].TextSize = 14
@@ -1018,7 +1018,7 @@ Converted["_HubDesc"].Parent = Converted["_Menu"]
 
 Converted["_HubName"].Font = Enum.Font.GothamBold
 Converted["_HubName"].RichText = true
-Converted["_HubName"].Text = "YARHM "
+Converted["_HubName"].Text = "AineHub "
 Converted["_HubName"].TextColor3 = Color3.fromRGB(255, 255, 255)
 Converted["_HubName"].TextScaled = true
 Converted["_HubName"].TextSize = 14
@@ -1078,7 +1078,7 @@ Converted["_Opener"].Name = "Opener"
 Converted["_Opener"].Parent = Converted["_CanvasGroup"]
 
 Converted["_TextLabel5"].Font = Enum.Font.GothamBold
-Converted["_TextLabel5"].Text = "Yet Another Random Hub Menu"
+Converted["_TextLabel5"].Text = "AineHub"
 Converted["_TextLabel5"].TextColor3 = Color3.fromRGB(255, 69.00000348687172, 67.00000360608101)
 Converted["_TextLabel5"].TextScaled = true
 Converted["_TextLabel5"].TextSize = 14
@@ -1194,7 +1194,7 @@ Converted["_TextLabel7"].Size = UDim2.new(0, 200, 0, 50)
 Converted["_TextLabel7"].Parent = Converted["_Area1"]
 
 Converted["_TextLabel8"].Font = Enum.Font.GothamBold
-Converted["_TextLabel8"].Text = "YARHM"
+Converted["_TextLabel8"].Text = "AineHub"
 Converted["_TextLabel8"].TextColor3 = Color3.fromRGB(255, 255, 255)
 Converted["_TextLabel8"].TextScaled = true
 Converted["_TextLabel8"].TextSize = 14
@@ -2132,8 +2132,14 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 		
 		local YARHMPointSave = PointSave.new("YARHM")
 		
-		local States = {}
-		local toggleStates = {}
+		local States = {
+			["PlayersMurder Mystery 2"] = true,
+			["Dropped_GunMurder Mystery 2"] = true,
+			["TrapsMurder Mystery 2"] = true,
+		}
+		local toggleStates = {
+			["Hide my own ESPMurder Mystery 2"] = true,
+		}
 		local rangeValueStates = {}
 		local AREA = script.Parent.Menu.Area.Area
 		local AREACONTAINER = script.Parent.Menu.Area
@@ -5319,7 +5325,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 	
 	local espcontainer = espindc.new({ArrowEdgePadding = 50, ArrowShowDistanceText = false,})
 	
-	local playerESP = false
+	local playerESP = true
 	local sheriffAimbot = false
 	local coinAutoCollect = false
 	local autoShooting = false
@@ -5335,9 +5341,9 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 	local gunDropTakeExp = false
 	
 	
-	local gunDropESP
+	local gunDropESP = true
 	
-	local trapDetection = false
+	local trapDetection = true
 	--local trapESP = Instance.new("Highlight")
 	--trapESP.Name = "TrapESP"
 	--trapESP.FillColor = Color3.fromRGB(255, 112, 10)
@@ -5452,7 +5458,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 	
 	
 	
-	local hideMeEsp = false
+	local hideMeEsp = true
 	function reloadESP()
 		if not playerESP then return end
 		espcontainer:RemoveGroup("players")
@@ -5584,6 +5590,47 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		getgenv().YARHM_miniFling = miniFling
 		getgenv().YARHM_getMap = getMap
 	end
+
+	-- Auto-start default enabled ESPs
+	task.spawn(function()
+		task.wait(1)
+		if playerESP then
+			task.spawn(function()
+				repeat task.wait(1) until findSheriff() or findMurderer() or not playerESP
+				if playerESP then reloadESP() end
+			end)
+		end
+		if trapDetection then
+			for _, v in ipairs(workspace:GetDescendants()) do
+				if v.Name == "Trap" and (v.Parent:IsA("Folder") or v.Parent:IsA("Model")) then
+					pcall(function()
+						v.Transparency = 0
+						espcontainer:Add(v, {
+							AccentColor = Color3.new(1, 0, 0),
+							ArrowShow = false,
+							ShowLabel = true,
+							LabelText = "Trap",
+							GroupName = "trap"
+						})
+					end)
+				end
+			end
+		end
+		if gunDropESP then
+			local map = getMap()
+			if map and map:FindFirstChild("GunDrop") then
+				espcontainer:Add(map:FindFirstChild("GunDrop"), {
+					AccentColor = Color3.new(0.952941, 1, 0.0745098),
+					ArrowShow = true,
+					ArrowMinDistance = 999999,
+					ArrowSize = UDim2.new(0, 40, 0, 40),
+					LabelText = "Dropped gun!",
+					ShowLabel = true,
+					GroupName = "gun"
+				})
+			end
+		end
+	end)
 	
 	
 	
@@ -8116,8 +8163,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end
 	menu.CanvasGroup.Opener.MouseButton1Click:Connect(openMenu)
 
-	-- ===== CUSTOM: Quick Action Buttons (Shoot Murd, Grab Gun, Fling Murd) =====
+	-- ===== CUSTOM: Quick Action Buttons (Grab Gun, Fling Murd, Kill All, Noclip Switch, Shoot Murd) =====
 	local ts2 = game:GetService("TweenService")
+	local rs2 = game:GetService("RunService")
 	local screenGui = menu.Parent
 
 	local function makeQuickButton(name, text, bgColor, pos, anchor, size)
@@ -8176,7 +8224,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		UDim2.fromOffset(60, 60)
 	)
 
-	-- 2. Fling Murd Button (To the right of Grab Gun)
+	-- 2. Fling Murd Button (Top-Left, to the right of Grab Gun)
 	local flingMurdBtn, flingMurdScale = makeQuickButton(
 		"FlingMurdQuickBtn",
 		"Fling\nMurd",
@@ -8186,7 +8234,17 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		UDim2.fromOffset(60, 60)
 	)
 
-	-- 3. Shoot Murd Button (Right side)
+	-- 3. Kill All Murderer Button (Top-Left, directly under Grab Gun)
+	local killAllBtn, killAllScale = makeQuickButton(
+		"KillAllQuickBtn",
+		"Kill\nAll",
+		Color3.fromRGB(170, 15, 25),
+		UDim2.new(0, 20, 0, 130),
+		Vector2.new(0, 0),
+		UDim2.fromOffset(60, 60)
+	)
+
+	-- 4. Shoot Murd Button (Right side)
 	local shootMurdBtn, shootMurdScale = makeQuickButton(
 		"ShootMurdQuickBtn",
 		"Shoot\nMurd",
@@ -8196,6 +8254,117 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		UDim2.fromOffset(65, 65)
 	)
 
+	-- 5. Noclip Switch Toggle (Top-Right)
+	local noclipSwitch = Instance.new("TextButton")
+	noclipSwitch.Name = "NoclipQuickSwitch"
+	noclipSwitch.Text = ""
+	noclipSwitch.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	noclipSwitch.BorderSizePixel = 0
+	noclipSwitch.AnchorPoint = Vector2.new(1, 0)
+	noclipSwitch.Position = UDim2.new(1, -20, 0, 60)
+	noclipSwitch.Size = UDim2.fromOffset(80, 34)
+	noclipSwitch.Visible = false
+	noclipSwitch.ZIndex = 999
+	noclipSwitch.AutoButtonColor = false
+	noclipSwitch.Parent = screenGui
+
+	local noclipCorner = Instance.new("UICorner", noclipSwitch)
+	noclipCorner.CornerRadius = UDim.new(1, 0)
+
+	local noclipStroke = Instance.new("UIStroke", noclipSwitch)
+	noclipStroke.Color = Color3.fromRGB(255, 255, 255)
+	noclipStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	noclipStroke.Thickness = 2
+
+	local noclipScale = Instance.new("UIScale", noclipSwitch)
+	noclipScale.Scale = 0
+
+	local noclipLabel = Instance.new("TextLabel")
+	noclipLabel.Name = "NoclipLabel"
+	noclipLabel.Text = "NOCLIP"
+	noclipLabel.Font = Enum.Font.GothamBold
+	noclipLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	noclipLabel.TextScaled = true
+	noclipLabel.BackgroundTransparency = 1
+	noclipLabel.AnchorPoint = Vector2.new(0, 0.5)
+	noclipLabel.Position = UDim2.new(0, 32, 0.5, 0)
+	noclipLabel.Size = UDim2.new(0, 44, 0.65, 0)
+	noclipLabel.ZIndex = 1000
+	noclipLabel.Parent = noclipSwitch
+
+	local noclipKnob = Instance.new("Frame")
+	noclipKnob.Name = "Knob"
+	noclipKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	noclipKnob.BorderSizePixel = 0
+	noclipKnob.AnchorPoint = Vector2.new(0, 0.5)
+	noclipKnob.Position = UDim2.new(0, 4, 0.5, 0)
+	noclipKnob.Size = UDim2.fromOffset(26, 26)
+	noclipKnob.ZIndex = 1001
+	noclipKnob.Parent = noclipSwitch
+
+	local knobCorner = Instance.new("UICorner", noclipKnob)
+	knobCorner.CornerRadius = UDim.new(1, 0)
+
+	-- Noclip logic
+	local noclipActive = false
+	local noclipConn = nil
+	local function setNoclipState(active)
+		noclipActive = active
+		if noclipActive then
+			ts2:Create(noclipSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(0, 180, 95)
+			}):Play()
+			ts2:Create(noclipKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Position = UDim2.new(1, -30, 0.5, 0)
+			}):Play()
+			ts2:Create(noclipLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0, 6, 0.5, 0)
+			}):Play()
+
+			if not noclipConn then
+				noclipConn = rs2.Stepped:Connect(function()
+					local char = game:GetService("Players").LocalPlayer.Character
+					if char then
+						for _, part in ipairs(char:GetDescendants()) do
+							if part:IsA("BasePart") and part.CanCollide then
+								part.CanCollide = false
+							end
+						end
+					end
+				end)
+			end
+		else
+			ts2:Create(noclipSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+			}):Play()
+			ts2:Create(noclipKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0, 4, 0.5, 0)
+			}):Play()
+			ts2:Create(noclipLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0, 32, 0.5, 0)
+			}):Play()
+
+			if noclipConn then
+				noclipConn:Disconnect()
+				noclipConn = nil
+			end
+			local char = game:GetService("Players").LocalPlayer.Character
+			if char then
+				local hrp = char:FindFirstChild("HumanoidRootPart")
+				if hrp then hrp.CanCollide = true end
+			end
+		end
+	end
+
+	local lastNoclipToggle = 0
+	local function onNoclipToggle()
+		if tick() - lastNoclipToggle < 0.25 then return end
+		lastNoclipToggle = tick()
+		setNoclipState(not noclipActive)
+	end
+	noclipSwitch.MouseButton1Click:Connect(onNoclipToggle)
+	noclipSwitch.Activated:Connect(onNoclipToggle)
+
 	local function getNotify()
 		local fu2 = (getgenv and getgenv().YARHMFUNCTIONS) or nil
 		return function(msg)
@@ -8204,7 +8373,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			else
 				pcall(function()
 					game:GetService("StarterGui"):SetCore("SendNotification", {
-						Title = "YARHM MM2",
+						Title = "AineHub",
 						Text = msg,
 						Duration = 3
 					})
@@ -8342,7 +8511,6 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		local touchPart = gunDrop:FindFirstChild("Handle") or gunDrop
 		local prevPos = char:GetPivot()
 
-		-- Method 1: Bring gun to player & firetouchinterest
 		pcall(function()
 			if firetouchinterest and touchPart then
 				gunDrop:PivotTo(rootPart.CFrame)
@@ -8352,7 +8520,6 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			end
 		end)
 
-		-- Method 2: Fast teleport pickup and return
 		task.spawn(function()
 			task.wait(0.08)
 			if not lp.Backpack:FindFirstChild("Gun") and not char:FindFirstChild("Gun") then
@@ -8397,7 +8564,6 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		if getgenv and getgenv().YARHM_miniFling then
 			getgenv().YARHM_miniFling(murd)
 		else
-			-- Fallback fling
 			task.spawn(function()
 				local char = lp and lp.Character
 				local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -8422,6 +8588,60 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end
 
+	local lastKillAll = 0
+	local function onKillAllClick()
+		if tick() - lastKillAll < 0.5 then return end
+		lastKillAll = tick()
+		local notify = getNotify()
+		local lp = game:GetService("Players").LocalPlayer
+		local char = lp and lp.Character
+		if not char then return end
+
+		local findMurd = (getgenv and getgenv().YARHM_findMurderer)
+		local murd = findMurd and findMurd()
+		if not murd then
+			for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
+				if (p.Character and p.Character:FindFirstChild("Knife")) or (p.Backpack and p.Backpack:FindFirstChild("Knife")) then
+					murd = p
+					break
+				end
+			end
+		end
+
+		if murd ~= lp then
+			notify("You're not murderer.")
+			return
+		end
+
+		if not char:FindFirstChild("Knife") then
+			local hum = char:FindFirstChild("Humanoid")
+			if lp.Backpack and lp.Backpack:FindFirstChild("Knife") and hum then
+				hum:EquipTool(lp.Backpack:FindFirstChild("Knife"))
+			else
+				notify("You don't have the knife..?")
+				return
+			end
+		end
+
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+			if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player ~= lp then
+				pcall(function()
+					player.Character.HumanoidRootPart.Anchored = true
+					player.Character.HumanoidRootPart.CFrame = root.CFrame + root.CFrame.LookVector * 1
+				end)
+			end
+		end
+
+		local knife = char:FindFirstChild("Knife")
+		if knife and knife:FindFirstChild("Stab") then
+			knife.Stab:FireServer("Slash")
+		end
+		notify("Kill all executed!")
+	end
+
 	-- Connect clicks
 	shootMurdBtn.MouseButton1Click:Connect(onShootClick)
 	shootMurdBtn.Activated:Connect(onShootClick)
@@ -8432,6 +8652,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	flingMurdBtn.MouseButton1Click:Connect(onFlingMurdClick)
 	flingMurdBtn.Activated:Connect(onFlingMurdClick)
 
+	killAllBtn.MouseButton1Click:Connect(onKillAllClick)
+	killAllBtn.Activated:Connect(onKillAllClick)
+
 	-- Sync visibility smoothly with minimized state
 	local _quickBtnsVisible = false
 	local function updateQuickBtnsVisibility()
@@ -8441,6 +8664,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			local btns = {
 				{btn = grabGunBtn, sc = grabGunScale},
 				{btn = flingMurdBtn, sc = flingMurdScale},
+				{btn = killAllBtn, sc = killAllScale},
+				{btn = noclipSwitch, sc = noclipScale},
 				{btn = shootMurdBtn, sc = shootMurdScale}
 			}
 			if shouldShow then
@@ -8463,7 +8688,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end
 
-	RunService.Heartbeat:Connect(updateQuickBtnsVisibility)
+	rs2.Heartbeat:Connect(updateQuickBtnsVisibility)
 	-- ===== END CUSTOM =====
 	UserInputService.InputBegan:Connect(function(inp, proc)
 		if proc then return end
