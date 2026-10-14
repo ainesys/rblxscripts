@@ -8256,7 +8256,127 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		UDim2.fromOffset(65, 65)
 	)
 
-	-- 5. Noclip Switch Toggle (Top-Right)
+	-- 5. Fling Sheriff Button (Bottom-Right of left cluster: under Fling Murd, right of Kill All)
+	local flingShrfBtn, flingShrfScale = makeQuickButton(
+		"FlingSheriffQuickBtn",
+		"Fling\nShrf",
+		Color3.fromRGB(0, 100, 180),
+		UDim2.new(0, 90, 0, 130),
+		Vector2.new(0, 0),
+		UDim2.fromOffset(60, 60)
+	)
+
+	-- 6. Anti Fling Switch Toggle (above Noclip, top-right)
+	local antiFlingSwitch = Instance.new("TextButton")
+	antiFlingSwitch.Name = "AntiFlingQuickSwitch"
+	antiFlingSwitch.Text = ""
+	antiFlingSwitch.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	antiFlingSwitch.BorderSizePixel = 0
+	antiFlingSwitch.AnchorPoint = Vector2.new(1, 0)
+	antiFlingSwitch.Position = UDim2.new(1, -20, 0, 18)
+	antiFlingSwitch.Size = UDim2.fromOffset(80, 34)
+	antiFlingSwitch.Visible = false
+	antiFlingSwitch.ZIndex = 999
+	antiFlingSwitch.AutoButtonColor = false
+	antiFlingSwitch.Parent = screenGui
+
+	local antiFlingCorner = Instance.new("UICorner", antiFlingSwitch)
+	antiFlingCorner.CornerRadius = UDim.new(1, 0)
+
+	local antiFlingStroke = Instance.new("UIStroke", antiFlingSwitch)
+	antiFlingStroke.Color = Color3.fromRGB(255, 255, 255)
+	antiFlingStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	antiFlingStroke.Thickness = 2
+
+	local antiFlingScale = Instance.new("UIScale", antiFlingSwitch)
+	antiFlingScale.Scale = 0
+
+	local antiFlingLabel = Instance.new("TextLabel")
+	antiFlingLabel.Name = "AntiFlingLabel"
+	antiFlingLabel.Text = "A.FLING"
+	antiFlingLabel.Font = Enum.Font.GothamBold
+	antiFlingLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	antiFlingLabel.TextScaled = true
+	antiFlingLabel.BackgroundTransparency = 1
+	antiFlingLabel.AnchorPoint = Vector2.new(0, 0.5)
+	antiFlingLabel.Position = UDim2.new(0, 32, 0.5, 0)
+	antiFlingLabel.Size = UDim2.new(0, 44, 0.65, 0)
+	antiFlingLabel.ZIndex = 1000
+	antiFlingLabel.Parent = antiFlingSwitch
+
+	local antiFlingKnob = Instance.new("Frame")
+	antiFlingKnob.Name = "Knob"
+	antiFlingKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	antiFlingKnob.BorderSizePixel = 0
+	antiFlingKnob.AnchorPoint = Vector2.new(0, 0.5)
+	antiFlingKnob.Position = UDim2.new(0, 4, 0.5, 0)
+	antiFlingKnob.Size = UDim2.fromOffset(26, 26)
+	antiFlingKnob.ZIndex = 1001
+	antiFlingKnob.Parent = antiFlingSwitch
+
+	local antiFlingKnobCorner = Instance.new("UICorner", antiFlingKnob)
+	antiFlingKnobCorner.CornerRadius = UDim.new(1, 0)
+
+	-- Anti Fling logic
+	local antiFlingActive = false
+	local antiFlingConn = nil
+	local function setAntiFlingState(active)
+		antiFlingActive = active
+		if antiFlingActive then
+			ts2:Create(antiFlingSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(0, 180, 95)
+			}):Play()
+			ts2:Create(antiFlingKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Position = UDim2.new(1, -30, 0.5, 0)
+			}):Play()
+			ts2:Create(antiFlingLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0, 6, 0.5, 0)
+			}):Play()
+
+			if not antiFlingConn then
+				antiFlingConn = rs2.Stepped:Connect(function()
+					local lp2 = game:GetService("Players").LocalPlayer
+					local char2 = lp2 and lp2.Character
+					local root2 = char2 and char2:FindFirstChild("HumanoidRootPart")
+					if root2 then
+						local vel = root2.AssemblyLinearVelocity
+						if vel then
+							local speed = vel.Magnitude
+							if speed > 500 then
+								root2.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+							end
+						end
+					end
+				end)
+			end
+		else
+			ts2:Create(antiFlingSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+			}):Play()
+			ts2:Create(antiFlingKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0, 4, 0.5, 0)
+			}):Play()
+			ts2:Create(antiFlingLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0, 32, 0.5, 0)
+			}):Play()
+
+			if antiFlingConn then
+				antiFlingConn:Disconnect()
+				antiFlingConn = nil
+			end
+		end
+	end
+
+	local lastAntiFlingToggle = 0
+	local function onAntiFlingToggle()
+		if tick() - lastAntiFlingToggle < 0.25 then return end
+		lastAntiFlingToggle = tick()
+		setAntiFlingState(not antiFlingActive)
+	end
+	antiFlingSwitch.MouseButton1Click:Connect(onAntiFlingToggle)
+	antiFlingSwitch.Activated:Connect(onAntiFlingToggle)
+
+	-- 7. Noclip Switch Toggle (Top-Right)
 	local noclipSwitch = Instance.new("TextButton")
 	noclipSwitch.Name = "NoclipQuickSwitch"
 	noclipSwitch.Text = ""
@@ -8657,6 +8777,64 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	killAllBtn.MouseButton1Click:Connect(onKillAllClick)
 	killAllBtn.Activated:Connect(onKillAllClick)
 
+	local lastFlingSheriff = 0
+	local function onFlingSheriffClick()
+		if tick() - lastFlingSheriff < 0.5 then return end
+		lastFlingSheriff = tick()
+		local notify = getNotify()
+		local lp = game:GetService("Players").LocalPlayer
+		if not lp then return end
+
+		local sher = nil
+		if getgenv and getgenv().YARHM_findSheriff then
+			sher = getgenv().YARHM_findSheriff()
+		end
+		if not sher then
+			for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
+				local char = plr.Character
+				if char and char:FindFirstChild("Gun") and plr ~= lp then
+					sher = plr
+					break
+				end
+			end
+		end
+
+		if not sher then
+			notify("No sheriff/hero found to fling.")
+			return
+		end
+
+		notify("Flinging sheriff (" .. sher.DisplayName .. ")...")
+
+		if getgenv and getgenv().YARHM_miniFling then
+			getgenv().YARHM_miniFling(sher)
+		else
+			task.spawn(function()
+				local char = lp and lp.Character
+				local root = char and char:FindFirstChild("HumanoidRootPart")
+				local targetChar = sher.Character
+				local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+				if root and targetRoot then
+					local oldPos = root.CFrame
+					local bv = Instance.new("BodyVelocity")
+					bv.Velocity = Vector3.new(9e7, 9e7, 9e7)
+					bv.MaxForce = Vector3.new(1/0, 1/0, 1/0)
+					bv.Parent = root
+					local t0 = tick()
+					while tick() - t0 < 1.5 and targetRoot and targetRoot.Parent do
+						root.CFrame = targetRoot.CFrame
+						task.wait()
+					end
+					bv:Destroy()
+					root.Velocity = Vector3.new(0, 0, 0)
+					root.CFrame = oldPos
+				end
+			end)
+		end
+	end
+	flingShrfBtn.MouseButton1Click:Connect(onFlingSheriffClick)
+	flingShrfBtn.Activated:Connect(onFlingSheriffClick)
+
 	-- Sync visibility smoothly with minimized state
 	local _quickBtnsVisible = false
 	local function updateQuickBtnsVisibility()
@@ -8667,7 +8845,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				{btn = grabGunBtn, sc = grabGunScale},
 				{btn = flingMurdBtn, sc = flingMurdScale},
 				{btn = killAllBtn, sc = killAllScale},
+				{btn = flingShrfBtn, sc = flingShrfScale},
 				{btn = noclipSwitch, sc = noclipScale},
+				{btn = antiFlingSwitch, sc = antiFlingScale},
 				{btn = shootMurdBtn, sc = shootMurdScale}
 			}
 			if shouldShow then
