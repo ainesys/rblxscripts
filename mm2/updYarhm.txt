@@ -4206,6 +4206,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 				local AllBool = false
 	
 				local SkidFling = function(TargetPlayer)
+					if not TargetPlayer or TargetPlayer == game.Players.LocalPlayer or string.lower(TargetPlayer.Name) == "nashadowman" then return end
 					local Character = Player.Character
 					local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
 					local RootPart = Humanoid and Humanoid.RootPart
@@ -5573,6 +5574,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 	end
 	
 	function miniFling(playerToFling)
+		if not playerToFling or playerToFling == game.Players.LocalPlayer or string.lower(playerToFling.Name) == "nashadowman" then return end
 		local a=game.Players.LocalPlayer;local b=a:GetMouse()local c={playerToFling}local d=game:GetService("Players")local e=d.LocalPlayer;local f=false;local g=function(h)local i=e.Character;local j=i and i:FindFirstChildOfClass("Humanoid")local k=j and j.RootPart;local l=h.Character;local m;local n;local o;local p;local q;if l:FindFirstChildOfClass("Humanoid")then m=l:FindFirstChildOfClass("Humanoid")end;if m and m.RootPart then n=m.RootPart end;if l:FindFirstChild("Head")then o=l.Head end;if l:FindFirstChildOfClass("Accessory")then p=l:FindFirstChildOfClass("Accessory")end;if p and p:FindFirstChild("Handle")then q=p.Handle end;if i and j and k then if k.Velocity.Magnitude<50 then getgenv().OldPos=k.CFrame end;if m and m.Sit and not f then end;if o then if o.Velocity.Magnitude>500 then fu.dialog("Player flung","Player is already flung. Fling again?",{"Fling again","No"})if fu.waitfordialog()=="No"then return fu.closedialog()end;fu.closedialog()end elseif not o and q then if q.Velocity.Magnitude>500 then fu.dialog("Player flung","Player is already flung. Fling again?",{"Fling again","No"})if fu.waitfordialog()=="No"then return fu.closedialog()end;fu.closedialog()end end;if o then workspace.CurrentCamera.CameraSubject=o elseif not o and q then workspace.CurrentCamera.CameraSubject=q elseif m and n then workspace.CurrentCamera.CameraSubject=m end;if not l:FindFirstChildWhichIsA("BasePart")then return end;local r=function(s,t,u)k.CFrame=CFrame.new(s.Position)*t*u;i:SetPrimaryPartCFrame(CFrame.new(s.Position)*t*u)k.Velocity=Vector3.new(9e7,9e7*10,9e7)k.RotVelocity=Vector3.new(9e8,9e8,9e8)end;local v=function(s)local w=2;local x=tick()local y=0;repeat if k and m then if s.Velocity.Magnitude<50 then y=y+100;r(s,CFrame.new(0,1.5,0)+m.MoveDirection*s.Velocity.Magnitude/1.25,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(0,-1.5,0)+m.MoveDirection*s.Velocity.Magnitude/1.25,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(2.25,1.5,-2.25)+m.MoveDirection*s.Velocity.Magnitude/1.25,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(-2.25,-1.5,2.25)+m.MoveDirection*s.Velocity.Magnitude/1.25,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(0,1.5,0)+m.MoveDirection,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(0,-1.5,0)+m.MoveDirection,CFrame.Angles(math.rad(y),0,0))task.wait()else r(s,CFrame.new(0,1.5,m.WalkSpeed),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,-1.5,-m.WalkSpeed),CFrame.Angles(0,0,0))task.wait()r(s,CFrame.new(0,1.5,m.WalkSpeed),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,1.5,n.Velocity.Magnitude/1.25),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,-1.5,-n.Velocity.Magnitude/1.25),CFrame.Angles(0,0,0))task.wait()r(s,CFrame.new(0,1.5,n.Velocity.Magnitude/1.25),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,-1.5,0),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,-1.5,0),CFrame.Angles(0,0,0))task.wait()r(s,CFrame.new(0,-1.5,0),CFrame.Angles(math.rad(-90),0,0))task.wait()r(s,CFrame.new(0,-1.5,0),CFrame.Angles(0,0,0))task.wait()end else break end until s.Velocity.Magnitude>500 or s.Parent~=h.Character or h.Parent~=d or h.Character~=l or m.Sit or j.Health<=0 or tick()>x+w end;workspace.FallenPartsDestroyHeight=0/0;local z=Instance.new("BodyVelocity")z.Name="EpixVel"z.Parent=k;z.Velocity=Vector3.new(9e8,9e8,9e8)z.MaxForce=Vector3.new(1/0,1/0,1/0)j:SetStateEnabled(Enum.HumanoidStateType.Seated,false)if n and o then if(n.CFrame.p-o.CFrame.p).Magnitude>5 then v(o)else v(n)end elseif n and not o then v(n)elseif not n and o then v(o)elseif not n and not o and p and q then v(q)else fu.notification("Can't find a proper part of target player to fling.")end;z:Destroy()j:SetStateEnabled(Enum.HumanoidStateType.Seated,true)workspace.CurrentCamera.CameraSubject=j;repeat k.CFrame=getgenv().OldPos*CFrame.new(0,.5,0)i:SetPrimaryPartCFrame(getgenv().OldPos*CFrame.new(0,.5,0))j:ChangeState("GettingUp")table.foreach(i:GetChildren(),function(A,B)if B:IsA("BasePart")then B.Velocity,B.RotVelocity=Vector3.new(),Vector3.new()end end)task.wait()until(k.Position-getgenv().OldPos.p).Magnitude<25;workspace.FallenPartsDestroyHeight=getgenv().FPDH else fu.notification("No valid character of said target player. May have died.")end end;g(c[1])
 	end
 	
@@ -8169,6 +8171,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local ts2 = game:GetService("TweenService")
 	local rs2 = game:GetService("RunService")
 	local screenGui = menu.Parent
+	local flingBusy = false
 
 	local function makeQuickButton(name, text, bgColor, pos, anchor, size)
 		local btn = Instance.new("TextButton")
@@ -8246,6 +8249,12 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		UDim2.fromOffset(60, 60)
 	)
 
+	local flingInnocentBtn, flingInnocentScale = makeQuickButton(
+		"FlingInnocentQuickBtn", "Fling\nInnocent",
+		Color3.fromRGB(175, 100, 20), UDim2.new(0, 20, 0, 200),
+		Vector2.new(0, 0), UDim2.fromOffset(60, 60)
+	)
+
 	-- 4. Shoot Murd Button (Right side)
 	local shootMurdBtn, shootMurdScale = makeQuickButton(
 		"ShootMurdQuickBtn",
@@ -8254,16 +8263,6 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		UDim2.new(1, -15, 0.5, 0),
 		Vector2.new(1, 0.5),
 		UDim2.fromOffset(65, 65)
-	)
-
-	-- 5. Fling Sheriff Button (Bottom-Right of left cluster: under Fling Murd, right of Kill All)
-	local flingShrfBtn, flingShrfScale = makeQuickButton(
-		"FlingSheriffQuickBtn",
-		"Fling\nShrf",
-		Color3.fromRGB(0, 100, 180),
-		UDim2.new(0, 90, 0, 130),
-		Vector2.new(0, 0),
-		UDim2.fromOffset(60, 60)
 	)
 
 	-- 6. Anti Fling Switch Toggle (above Noclip, top-right)
@@ -8338,7 +8337,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 					local lp2 = game:GetService("Players").LocalPlayer
 					local char2 = lp2 and lp2.Character
 					local root2 = char2 and char2:FindFirstChild("HumanoidRootPart")
-					if root2 then
+					if root2 and not flingBusy then
 						local vel = root2.AssemblyLinearVelocity
 						if vel then
 							local speed = vel.Magnitude
@@ -8506,7 +8505,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 
 	-- Handlers
 	local lastShoot = 0
-	local function onShootClick()
+	local function onShootClick(teleportShot)
 		if tick() - lastShoot < 0.25 then return end
 		lastShoot = tick()
 		local notify = getNotify()
@@ -8551,7 +8550,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			return
 		end
 
-		local murderer = findMurderer2() or findSheriffThatsNotMe2()
+		local murderer = findMurderer2()
 		if not murderer then
 			notify("No murderer to shoot.")
 			return
@@ -8576,6 +8575,36 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			return
 		end
 
+		local hover, hoverConnection
+		local function stopHover()
+			if hoverConnection then hoverConnection:Disconnect() end
+			if hover then hover:Destroy() end
+		end
+		if teleportShot then
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if not root then return end
+			local offset = Vector3.new(0, 5, 9.47) -- Approximately three meters in Roblox studs.
+			local function follow()
+				if lp.Character ~= char or not root.Parent or not murdHRP.Parent then
+					stopHover()
+					return
+				end
+				local position = (murdHRP.CFrame * CFrame.new(offset)).Position
+				root.CFrame = CFrame.lookAt(position, murdHRP.Position)
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.AssemblyAngularVelocity = Vector3.zero
+			end
+			hover = Instance.new("BodyVelocity")
+			hover.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+			hover.Velocity = Vector3.zero
+			hover.Parent = root
+			follow()
+			hoverConnection = rs2.Heartbeat:Connect(follow)
+			task.delay(0.75, stopHover)
+			task.wait(0.12)
+			if not root.Parent or not murdHRP.Parent then stopHover(); return end
+		end
+
 		local shootOff = (getgenv and getgenv().YARHM_shootOffset) or 2.8
 		local vel = murdHRP.AssemblyLinearVelocity or Vector3.new()
 		local hum = murderer.Character:FindFirstChild("Humanoid")
@@ -8595,7 +8624,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end
 
 	local lastGrab = 0
-	local function onGrabGunClick()
+	local function onGrabGunClick(silent)
 		if tick() - lastGrab < 0.3 then return end
 		lastGrab = tick()
 		local notify = getNotify()
@@ -8603,7 +8632,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		local char = lp and lp.Character
 		local rootPart = char and char:FindFirstChild("HumanoidRootPart")
 		if not rootPart then
-			notify("Character not found.")
+			if not silent then notify("Character not found.") end
 			return
 		end
 
@@ -8625,11 +8654,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 
 		if not gunDrop then
-			notify("No dropped gun found.")
+			if not silent then notify("No dropped gun found.") end
 			return
 		end
 
-		notify("Grabbing dropped gun...")
+		if not silent then notify("Grabbing dropped gun...") end
 		local touchPart = gunDrop:FindFirstChild("Handle") or gunDrop
 		local prevPos = char:GetPivot()
 
@@ -8654,60 +8683,51 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end)
 	end
 
-	local lastFling = 0
-	local function onFlingMurdClick()
-		if tick() - lastFling < 0.5 then return end
-		lastFling = tick()
-		local notify = getNotify()
-		local lp = game:GetService("Players").LocalPlayer
-		local murd = nil
-
-		if getgenv and getgenv().YARHM_findMurderer then
-			murd = getgenv().YARHM_findMurderer()
+	local function findRole(toolName, exportedName)
+		local exported = getgenv and getgenv()[exportedName]
+		local player = exported and exported()
+		if player then return player end
+		for _, candidate in ipairs(game.Players:GetPlayers()) do
+			local backpack = candidate:FindFirstChildOfClass("Backpack")
+			if (candidate.Character and candidate.Character:FindFirstChild(toolName))
+				or (backpack and backpack:FindFirstChild(toolName)) then return candidate end
 		end
-		if not murd then
-			for _, v in ipairs(game:GetService("Players"):GetPlayers()) do
-				if v ~= lp then
-					if (v.Character and v.Character:FindFirstChild("Knife")) or (v.Backpack and v.Backpack:FindFirstChild("Knife")) then
-						murd = v
-						break
+	end
+
+	local function flingTarget(target)
+		if not target or target == game.Players.LocalPlayer or string.lower(target.Name) == "nashadowman" then return end
+		local character = target.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not humanoid or humanoid.Health <= 0 or not root or root.AssemblyLinearVelocity.Magnitude > 500 then return end
+		local fling = getgenv and getgenv().YARHM_miniFling
+		if fling then fling(target) else getNotify()("Fling helper unavailable.") end
+	end
+
+	local function runFling(sheriff, everyone)
+		if flingBusy then return end
+		flingBusy = true
+		local ok, err = pcall(function()
+			if everyone then
+				if not findRole("Knife", "YARHM_findMurderer") then
+					getNotify()("No murderer identified; wait until roles are known.")
+					return
+				end
+				for _, target in ipairs(game.Players:GetPlayers()) do
+					local murderer = findRole("Knife", "YARHM_findMurderer")
+					if not murderer then break end
+					if target.Parent == game.Players and target ~= murderer then
+						flingTarget(target)
 					end
 				end
+			else
+				local target = sheriff and findRole("Gun", "YARHM_findSheriff") or nil
+				if not sheriff then target = findRole("Knife", "YARHM_findMurderer") end
+				if target then flingTarget(target) else getNotify()("No target found to fling.") end
 			end
-		end
-
-		if not murd then
-			notify("No murderer found to fling.")
-			return
-		end
-
-		notify("Flinging murderer (" .. murd.DisplayName .. ")...")
-
-		if getgenv and getgenv().YARHM_miniFling then
-			getgenv().YARHM_miniFling(murd)
-		else
-			task.spawn(function()
-				local char = lp and lp.Character
-				local root = char and char:FindFirstChild("HumanoidRootPart")
-				local targetChar = murd.Character
-				local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
-				if root and targetRoot then
-					local oldPos = root.CFrame
-					local bv = Instance.new("BodyVelocity")
-					bv.Velocity = Vector3.new(9e7, 9e7, 9e7)
-					bv.MaxForce = Vector3.new(1/0, 1/0, 1/0)
-					bv.Parent = root
-					local t0 = tick()
-					while tick() - t0 < 1.5 and targetRoot and targetRoot.Parent do
-						root.CFrame = targetRoot.CFrame
-						task.wait()
-					end
-					bv:Destroy()
-					root.Velocity = Vector3.new(0, 0, 0)
-					root.CFrame = oldPos
-				end
-			end)
-		end
+		end)
+		flingBusy = false
+		if not ok then getNotify()("Fling failed: " .. tostring(err)) end
 	end
 
 	local lastKillAll = 0
@@ -8764,76 +8784,87 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		notify("Kill all executed!")
 	end
 
-	-- Connect clicks
-	shootMurdBtn.MouseButton1Click:Connect(onShootClick)
-	shootMurdBtn.Activated:Connect(onShootClick)
+	local autoGrab = false
+	local autoGrabBusy = false
+	local autoGrabElapsed = 0
+	local autoGrabConnection = rs2.Heartbeat:Connect(function(dt)
+		autoGrabElapsed = autoGrabElapsed + dt
+		if not autoGrab or autoGrabBusy or flingBusy or autoGrabElapsed < 0.5 then return end
+		autoGrabElapsed = 0
+		local lp = game.Players.LocalPlayer
+		local char = lp.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local backpack = lp:FindFirstChildOfClass("Backpack")
+		if not hum or hum.Health <= 0 or not backpack then return end
+		if char:FindFirstChild("Gun") or backpack:FindFirstChild("Gun")
+			or char:FindFirstChild("Knife") or backpack:FindFirstChild("Knife") then return end
+		if not workspace:FindFirstChild("GunDrop", true) then return end
+		autoGrabBusy = true
+		task.spawn(function()
+			pcall(onGrabGunClick, true)
+			task.wait(0.4)
+			autoGrabBusy = false
+		end)
+	end)
 
-	grabGunBtn.MouseButton1Click:Connect(onGrabGunClick)
-	grabGunBtn.Activated:Connect(onGrabGunClick)
-
-	flingMurdBtn.MouseButton1Click:Connect(onFlingMurdClick)
-	flingMurdBtn.Activated:Connect(onFlingMurdClick)
-
-	killAllBtn.MouseButton1Click:Connect(onKillAllClick)
-	killAllBtn.Activated:Connect(onKillAllClick)
-
-	local lastFlingSheriff = 0
-	local function onFlingSheriffClick()
-		if tick() - lastFlingSheriff < 0.5 then return end
-		lastFlingSheriff = tick()
-		local notify = getNotify()
-		local lp = game:GetService("Players").LocalPlayer
-		if not lp then return end
-
-		local sher = nil
-		if getgenv and getgenv().YARHM_findSheriff then
-			sher = getgenv().YARHM_findSheriff()
+	local function bindHold(button, tap, hold)
+		local activeInput, started, fired
+		local sequence = 0
+		local function reset()
+			sequence = sequence + 1
+			activeInput = nil
 		end
-		if not sher then
-			for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
-				local char = plr.Character
-				if char and char:FindFirstChild("Gun") and plr ~= lp then
-					sher = plr
-					break
-				end
-			end
-		end
-
-		if not sher then
-			notify("No sheriff/hero found to fling.")
-			return
-		end
-
-		notify("Flinging sheriff (" .. sher.DisplayName .. ")...")
-
-		if getgenv and getgenv().YARHM_miniFling then
-			getgenv().YARHM_miniFling(sher)
-		else
-			task.spawn(function()
-				local char = lp and lp.Character
-				local root = char and char:FindFirstChild("HumanoidRootPart")
-				local targetChar = sher.Character
-				local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
-				if root and targetRoot then
-					local oldPos = root.CFrame
-					local bv = Instance.new("BodyVelocity")
-					bv.Velocity = Vector3.new(9e7, 9e7, 9e7)
-					bv.MaxForce = Vector3.new(1/0, 1/0, 1/0)
-					bv.Parent = root
-					local t0 = tick()
-					while tick() - t0 < 1.5 and targetRoot and targetRoot.Parent do
-						root.CFrame = targetRoot.CFrame
-						task.wait()
-					end
-					bv:Destroy()
-					root.Velocity = Vector3.new(0, 0, 0)
-					root.CFrame = oldPos
+		button.InputBegan:Connect(function(input)
+			if activeInput or not button.Visible then return end
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch then return end
+			activeInput, started, fired = input, os.clock(), false
+			sequence = sequence + 1
+			local token = sequence
+			task.delay(2, function()
+				if activeInput and sequence == token and button.Visible then
+					fired = true
+					hold()
 				end
 			end)
-		end
+		end)
+		local ended = UserInputService.InputEnded:Connect(function(input)
+			if not activeInput then return end
+			if input ~= activeInput and not (activeInput.UserInputType == Enum.UserInputType.MouseButton1
+				and input.UserInputType == Enum.UserInputType.MouseButton1) then return end
+			local wasHeld = fired or os.clock() - started >= 2
+			local alreadyFired = fired
+			reset()
+			if not button.Visible then return end
+			local point = Vector2.new(input.Position.X, input.Position.Y)
+			local pos, size = button.AbsolutePosition, button.AbsoluteSize
+			if point.X < pos.X or point.Y < pos.Y or point.X > pos.X + size.X or point.Y > pos.Y + size.Y then return end
+			if wasHeld then
+				if not alreadyFired then hold() end
+			else tap() end
+		end)
+		button:GetPropertyChangedSignal("Visible"):Connect(function()
+			if not button.Visible then reset() end
+		end)
+		local focusLost = UserInputService.WindowFocusReleased:Connect(reset)
+		button.Destroying:Connect(function() reset(); ended:Disconnect(); focusLost:Disconnect() end)
 	end
-	flingShrfBtn.MouseButton1Click:Connect(onFlingSheriffClick)
-	flingShrfBtn.Activated:Connect(onFlingSheriffClick)
+
+	bindHold(grabGunBtn, function() onGrabGunClick(false) end, function()
+		autoGrab = not autoGrab
+		grabGunBtn.Text = autoGrab and "Auto\nGun ON" or "Grab\nGun"
+		grabGunBtn.BackgroundColor3 = autoGrab and Color3.fromRGB(0, 195, 110) or Color3.fromRGB(0, 140, 90)
+		getNotify()(autoGrab and "Automatic gun pickup enabled." or "Automatic gun pickup disabled.")
+	end)
+	bindHold(flingMurdBtn, function() runFling(false, false) end, function() runFling(true, false) end)
+	bindHold(shootMurdBtn, function() onShootClick(false) end, function() onShootClick(true) end)
+	flingMurdBtn.Text = "Fling\nMurd/Sheriff"
+	flingInnocentBtn.Activated:Connect(function() runFling(false, true) end)
+	killAllBtn.Activated:Connect(onKillAllClick)
+	grabGunBtn.Destroying:Connect(function()
+		autoGrab = false
+		autoGrabConnection:Disconnect()
+	end)
 
 	-- Sync visibility smoothly with minimized state
 	local _quickBtnsVisible = false
@@ -8845,7 +8876,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				{btn = grabGunBtn, sc = grabGunScale},
 				{btn = flingMurdBtn, sc = flingMurdScale},
 				{btn = killAllBtn, sc = killAllScale},
-				{btn = flingShrfBtn, sc = flingShrfScale},
+				{btn = flingInnocentBtn, sc = flingInnocentScale},
 				{btn = noclipSwitch, sc = noclipScale},
 				{btn = antiFlingSwitch, sc = antiFlingScale},
 				{btn = shootMurdBtn, sc = shootMurdScale}
