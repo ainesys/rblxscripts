@@ -8758,8 +8758,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 
 	-- Handlers
 	local lastShoot = 0
+	local teleportShotBusy = false
 	local function onShootClick(teleportShot)
-		if tick() - lastShoot < 0.25 then return end
+		if teleportShotBusy or tick() - lastShoot < 0.25 then return end
 		lastShoot = tick()
 		releaseFarm(true)
 		farmPauseUntil = tick() + 1.5
@@ -8830,14 +8831,29 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			return
 		end
 
-		local hover, hoverConnection
+		local hover, hoverConnection, returnPivot, shotRoot
+		local cleanedUp = false
 		local function stopHover()
+			if cleanedUp then return end
+			cleanedUp = true
 			if hoverConnection then hoverConnection:Disconnect() end
 			if hover then hover:Destroy() end
+			if returnPivot and lp.Character == char and shotRoot and shotRoot.Parent then
+				local humanoid = char:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					char:PivotTo(returnPivot)
+					shotRoot.AssemblyLinearVelocity = Vector3.zero
+					shotRoot.AssemblyAngularVelocity = Vector3.zero
+				end
+			end
+			if returnPivot then teleportShotBusy = false end
 		end
 		if teleportShot then
 			local root = char:FindFirstChild("HumanoidRootPart")
 			if not root then return end
+			returnPivot = char:GetPivot()
+			shotRoot = root
+			teleportShotBusy = true
 			local offset = Vector3.new(0, 5, 9.47) -- Approximately three meters in Roblox studs.
 			local function follow()
 				if lp.Character ~= char or not root.Parent or not murdHRP.Parent then
@@ -8857,7 +8873,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			hoverConnection = rs2.Heartbeat:Connect(follow)
 			task.delay(0.75, stopHover)
 			task.wait(0.12)
-			if not root.Parent or not murdHRP.Parent then stopHover(); return end
+			if cleanedUp or lp.Character ~= char or not root.Parent or not murdHRP.Parent then stopHover(); return end
 		end
 
 		local shootOff = (getgenv and getgenv().YARHM_shootOffset) or 2.8
@@ -8869,13 +8885,20 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			+ moveDir * shootOff
 
 		local rh = char:FindFirstChild("RightHand") or char:FindFirstChild("HumanoidRootPart")
-		if not rh then return end
+		if not rh then stopHover(); return end
 
 		local args = { CFrame.new(rh.Position), CFrame.new(predicted) }
 		local gun = char:FindFirstChild("Gun")
-		if gun and gun:FindFirstChild("Shoot") then
-			gun.Shoot:FireServer(unpack(args))
+		local ok, err = pcall(function()
+			if gun and gun:FindFirstChild("Shoot") then
+				gun.Shoot:FireServer(unpack(args))
+			end
+		end)
+		if teleportShot then
+			task.wait(0.1)
+			stopHover()
 		end
+		if not ok then notify("Shot failed: " .. tostring(err)) end
 	end
 
 	local lastGrab = 0
