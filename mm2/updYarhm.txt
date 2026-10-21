@@ -5593,6 +5593,16 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		getgenv().YARHM_findSheriffThatsNotMe = findSheriffThatsNotMe
 		getgenv().YARHM_miniFling = miniFling
 		getgenv().YARHM_getMap = getMap
+		getgenv().YARHM_isAliveInRound = function(player)
+			local data = playerData and playerData[player.Name]
+			if not data or data.Dead ~= false or data.Killed ~= false then return false end
+			if data.Role ~= "Innocent" and data.Role ~= "Sheriff" and data.Role ~= "Hero"
+				and data.Role ~= "Murderer" then return false end
+			local character = player.Character
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			return player.Parent == game.Players and character ~= nil
+				and character:IsDescendantOf(workspace) and humanoid ~= nil and humanoid.Health > 0
+		end
 	end
 
 	-- Auto-start default enabled ESPs
@@ -8694,8 +8704,12 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end
 
-	local function flingTarget(target)
+	local function flingTarget(target, aliveOnly)
 		if not target or target == game.Players.LocalPlayer or string.lower(target.Name) == "nashadowman" then return end
+		if aliveOnly then
+			local isAlive = getgenv and getgenv().YARHM_isAliveInRound
+			if not isAlive or not isAlive(target) then return end
+		end
 		local character = target.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -8717,7 +8731,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 					local murderer = findRole("Knife", "YARHM_findMurderer")
 					if not murderer then break end
 					if target.Parent == game.Players and target ~= murderer then
-						flingTarget(target)
+						flingTarget(target, true)
 					end
 				end
 			else
