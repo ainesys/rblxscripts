@@ -1,3 +1,153 @@
+-- Runtime resources belong to this script instance and are released on close.
+local NativeTask, NativeCoroutine, NativeInstance = task, coroutine, Instance
+local AineRuntime = {
+	closed = false, connections = {}, cleanups = {},
+	threads = setmetatable({}, {__mode = "k"}),
+	objects = setmetatable({}, {__mode = "k"}),
+	properties = setmetatable({}, {__mode = "k"}),
+}
+function AineRuntime.remember(object, property)
+	local values = AineRuntime.properties[object]
+	if not values then values = {}; AineRuntime.properties[object] = values end
+	if values[property] ~= nil then return end
+	local ok, value = pcall(function() return object[property] end)
+	if ok then values[property] = {value} end
+end
+function AineRuntime.onClose(callback)
+	table.insert(AineRuntime.cleanups, callback)
+end
+function AineRuntime.run(callback, ...)
+	if AineRuntime.closed then return end
+	local thread = NativeCoroutine.running()
+	AineRuntime.threads[thread] = true
+	local results = table.pack(callback(...))
+	AineRuntime.threads[thread] = nil
+	return table.unpack(results, 1, results.n)
+end
+function AineRuntime.connect(signal, callback)
+	local connection = signal:Connect(function(...) return AineRuntime.run(callback, ...) end)
+	if AineRuntime.closed then connection:Disconnect() else table.insert(AineRuntime.connections, connection) end
+	return connection
+end
+function AineRuntime.once(signal, callback)
+	local connection = signal:Once(function(...) return AineRuntime.run(callback, ...) end)
+	if AineRuntime.closed then connection:Disconnect() else table.insert(AineRuntime.connections, connection) end
+	return connection
+end
+function AineRuntime.clone(object)
+	local clone = object:Clone()
+	AineRuntime.objects[clone] = true
+	return clone
+end
+function AineRuntime.create(object, ...)
+	local result = object:Create(...)
+	if typeof(result) == "Instance" then AineRuntime.objects[result] = true end
+	return result
+end
+local task = setmetatable({}, {__index = NativeTask})
+for _, method in ipairs({"spawn", "defer", "delay"}) do
+	task[method] = function(first, ...)
+		local thread
+		if method == "delay" then
+			local callback = ...
+			local parameters = table.pack(select(2, ...))
+			thread = NativeTask.delay(first, function()
+				if type(callback) == "thread" then NativeCoroutine.resume(callback, table.unpack(parameters, 1, parameters.n))
+				else AineRuntime.run(callback, table.unpack(parameters, 1, parameters.n)) end
+			end)
+		else
+			local parameters = table.pack(...)
+			thread = NativeTask[method](function()
+				if type(first) == "thread" then NativeCoroutine.resume(first, table.unpack(parameters, 1, parameters.n))
+				else AineRuntime.run(first, table.unpack(parameters, 1, parameters.n)) end
+			end)
+		end
+		AineRuntime.threads[thread] = true
+		return thread
+	end
+end
+local coroutine = setmetatable({}, {__index = NativeCoroutine})
+function coroutine.create(callback)
+	local thread = NativeCoroutine.create(function(...) return AineRuntime.run(callback, ...) end)
+	AineRuntime.threads[thread] = true
+	return thread
+end
+function coroutine.wrap(callback)
+	local thread = coroutine.create(callback)
+	return function(...)
+		if AineRuntime.closed then return end
+		local results = table.pack(NativeCoroutine.resume(thread, ...))
+		if not results[1] then error(results[2], 2) end
+		return table.unpack(results, 2, results.n)
+	end
+end
+local Instance = setmetatable({}, {__index = NativeInstance})
+function Instance.new(...)
+	local object = NativeInstance.new(...)
+	AineRuntime.objects[object] = true
+	return object
+end
+local function captureCharacter(character)
+	local function capture(part)
+		if part:IsA("BasePart") then
+			for _, property in ipairs({"CanCollide", "CanTouch", "Anchored", "Size", "Transparency", "LocalTransparencyModifier"}) do
+				AineRuntime.remember(part, property)
+			end
+		elseif part:IsA("Humanoid") then
+			for _, property in ipairs({"WalkSpeed", "JumpPower", "JumpHeight", "AutoRotate", "PlatformStand", "HipHeight"}) do
+				AineRuntime.remember(part, property)
+			end
+		end
+	end
+	for _, part in ipairs(character:GetDescendants()) do capture(part) end
+	AineRuntime.connect(character.DescendantAdded, capture)
+end
+local runtimePlayer = game:GetService("Players").LocalPlayer
+if runtimePlayer.Character then captureCharacter(runtimePlayer.Character) end
+AineRuntime.connect(runtimePlayer.CharacterAdded, captureCharacter)
+AineRuntime.remember(workspace, "Gravity")
+AineRuntime.remember(workspace, "FallenPartsDestroyHeight")
+if workspace.CurrentCamera then
+	AineRuntime.remember(workspace.CurrentCamera, "FieldOfView")
+	AineRuntime.remember(workspace.CurrentCamera, "CameraType")
+end
+function AineRuntime.close()
+	if AineRuntime.closed then return end
+	AineRuntime.closed = true
+	for _, connection in ipairs(AineRuntime.connections) do pcall(function() connection:Disconnect() end) end
+	local current = NativeCoroutine.running()
+	for thread in pairs(AineRuntime.threads) do
+		if thread ~= current and NativeCoroutine.status(thread) ~= "dead" then pcall(NativeTask.cancel, thread) end
+	end
+	for index = #AineRuntime.cleanups, 1, -1 do pcall(AineRuntime.cleanups[index]) end
+	for object in pairs(AineRuntime.objects) do
+		if object:IsA("TweenBase") then pcall(function() object:Cancel() end) end
+	end
+	for object in pairs(AineRuntime.objects) do pcall(function() object:Destroy() end) end
+	for object, values in pairs(AineRuntime.properties) do
+		for property, saved in pairs(values) do pcall(function() object[property] = saved[1] end) end
+	end
+	local character = runtimePlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if humanoid then
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+		humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		if workspace.CurrentCamera then workspace.CurrentCamera.CameraSubject = humanoid end
+	end
+	if root then root.AssemblyLinearVelocity = Vector3.zero; root.AssemblyAngularVelocity = Vector3.zero end
+	if getgenv then
+		local env = getgenv()
+		local keys = {}
+		for key in pairs(env) do
+			if type(key) == "string" and (key:match("^YARHM") or key:match("^fBSF")) then table.insert(keys, key) end
+		end
+		for _, key in ipairs(keys) do env[key] = nil end
+	end
+	table.clear(AineRuntime.connections)
+	table.clear(AineRuntime.cleanups)
+end
+
 -- AineHub 1.21.6 (Custom Mobile Edition)
 -- Build Number: 40
 -- Build Date: 2026-09-29T02:35:21Z
@@ -2108,12 +2258,12 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			
 			
 		function DraggableObjectf()
-			local function a(b,c)local d=c.AbsoluteSize;local e=c.AbsolutePosition;local f=b.X.Scale*d.X+b.X.Offset;local g=b.Y.Scale*d.Y+b.Y.Offset;local h=math.clamp(f,0,d.X)local i=math.clamp(g,0,d.Y)local j=UDim2.new(b.X.Scale,h-b.X.Scale*d.X,b.Y.Scale,i-b.Y.Scale*d.Y)return j end;local k=UDim2.new;local l=game:GetService("UserInputService")local m=game:GetService("TweenService")local n={}n.__index=n;function n.new(o,p,q,r)local self={}self.Object=o;self.ToMove=p;self.Smooth=q;self.CallbackOnly=r;self.CanBeDragged=false;self.DragStarted=nil;self.DragEnded=nil;self.Dragged=nil;self.Dragging=false;self.LastPosition=nil;self.Velocity=Vector2.new(0,0)setmetatable(self,n)return self end;function n:Enable()self.CanBeDragged=true;local s=self.Object;local t=self.ToMove;local u=nil;local v=nil;local w=nil;local x=false;local function y(z)local A=z.Position-v;local B=UDim2.new(w.X.Scale,w.X.Offset+A.X,w.Y.Scale,w.Y.Offset+A.Y)if self.CallbackOnly then else B=a(B,self.Object:FindFirstAncestorWhichIsA("ScreenGui"))if(self.Smooth==nil or self.Smooth==true)and self.Smooth~=false then m:Create(t and t or s,TweenInfo.new(0.5,Enum.EasingStyle.Cubic,Enum.EasingDirection.Out),{Position=B}):Play()else local C=t and t or s;C.Position=B end end;return B end;self.InputBegan=s.InputBegan:Connect(function(z)if z.UserInputType==Enum.UserInputType.MouseButton1 or z.UserInputType==Enum.UserInputType.Touch then x=true;local D;D=z.Changed:Connect(function()if z.UserInputState==Enum.UserInputState.End and(self.Dragging or x)then self.Dragging=false;D:Disconnect()if self.DragEnded and not x then self.DragEnded(self.Velocity)end;x=false end end)end end)self.InputChanged=s.InputChanged:Connect(function(z)if z.UserInputType==Enum.UserInputType.MouseMovement or z.UserInputType==Enum.UserInputType.Touch then u=z end end)self.InputChanged2=l.InputChanged:Connect(function(z)if s.Parent==nil then self:Disable()return end;if x then x=false;if self.DragStarted then self.DragStarted()end;self.Dragging=true;v=z.Position;if t then w=t.Position else w=s.Position end;self.LastPosition=z.Position end;if z==u and self.Dragging then local B=y(z)self.Velocity=z.Position-self.LastPosition;self.LastPosition=z.Position;if self.Dragged then self.Dragged(B)end end end)end;function n:Disable()self.CanBeDragged=false;self.InputBegan:Disconnect()self.InputChanged:Disconnect()self.InputChanged2:Disconnect()if self.Dragging then self.Dragging=false;if self.DragEnded then self.DragEnded(self.Velocity)end end end;return n	
+			local function a(b,c)local d=c.AbsoluteSize;local e=c.AbsolutePosition;local f=b.X.Scale*d.X+b.X.Offset;local g=b.Y.Scale*d.Y+b.Y.Offset;local h=math.clamp(f,0,d.X)local i=math.clamp(g,0,d.Y)local j=UDim2.new(b.X.Scale,h-b.X.Scale*d.X,b.Y.Scale,i-b.Y.Scale*d.Y)return j end;local k=UDim2.new;local l=game:GetService("UserInputService")local m=game:GetService("TweenService")local n={}n.__index=n;function n.new(o,p,q,r)local self={}self.Object=o;self.ToMove=p;self.Smooth=q;self.CallbackOnly=r;self.CanBeDragged=false;self.DragStarted=nil;self.DragEnded=nil;self.Dragged=nil;self.Dragging=false;self.LastPosition=nil;self.Velocity=Vector2.new(0,0)setmetatable(self,n)return self end;function n:Enable()self.CanBeDragged=true;local s=self.Object;local t=self.ToMove;local u=nil;local v=nil;local w=nil;local x=false;local function y(z)local A=z.Position-v;local B=UDim2.new(w.X.Scale,w.X.Offset+A.X,w.Y.Scale,w.Y.Offset+A.Y)if self.CallbackOnly then else B=a(B,self.Object:FindFirstAncestorWhichIsA("ScreenGui"))if(self.Smooth==nil or self.Smooth==true)and self.Smooth~=false then AineRuntime.create(m, t and t or s,TweenInfo.new(0.5,Enum.EasingStyle.Cubic,Enum.EasingDirection.Out),{Position=B}):Play()else local C=t and t or s;C.Position=B end end;return B end;self.InputBegan=AineRuntime.connect(s.InputBegan, function(z)if z.UserInputType==Enum.UserInputType.MouseButton1 or z.UserInputType==Enum.UserInputType.Touch then x=true;local D;D=AineRuntime.connect(z.Changed, function()if z.UserInputState==Enum.UserInputState.End and(self.Dragging or x)then self.Dragging=false;D:Disconnect()if self.DragEnded and not x then self.DragEnded(self.Velocity)end;x=false end end)end end)self.InputChanged=AineRuntime.connect(s.InputChanged, function(z)if z.UserInputType==Enum.UserInputType.MouseMovement or z.UserInputType==Enum.UserInputType.Touch then u=z end end)self.InputChanged2=AineRuntime.connect(l.InputChanged, function(z)if s.Parent==nil then self:Disable()return end;if x then x=false;if self.DragStarted then self.DragStarted()end;self.Dragging=true;v=z.Position;if t then w=t.Position else w=s.Position end;self.LastPosition=z.Position end;if z==u and self.Dragging then local B=y(z)self.Velocity=z.Position-self.LastPosition;self.LastPosition=z.Position;if self.Dragged then self.Dragged(B)end end end)end;function n:Disable()self.CanBeDragged=false;self.InputBegan:Disconnect()self.InputChanged:Disconnect()self.InputChanged2:Disconnect()if self.Dragging then self.Dragging=false;if self.DragEnded then self.DragEnded(self.Velocity)end end end;return n
 		end
 		local DraggableObject = DraggableObjectf()
 		
 		function ClickAndHoldf()
-			local a={}a.__index=a;local b=game:GetService("UserInputService")function a.new(c,d)local self=setmetatable({},a)self.textButton=c;self.holdTime=d or 0.5;self.holdTask=nil;self.initialPosition=nil;self.Holded=Instance.new("BindableEvent")local function e(f,g)return math.sqrt((g.X-f.X)^2+(g.Y-f.Y)^2)end;self.textButton.MouseButton1Down:Connect(function(h,i)self.initialPosition=Vector2.new(h,i)self.holdTask=task.spawn(function()task.wait(self.holdTime)if self.holdTask then self.Holded:Fire()end end)end)b.InputChanged:Connect(function(j)if j.UserInputType==Enum.UserInputType.MouseMovement or j.UserInputType==Enum.UserInputType.Touch then if self.holdTask and self.initialPosition then local k=j.Position;local l=e(self.initialPosition,k)if l>10 then coroutine.close(self.holdTask)self.holdTask=nil end end end end)b.InputEnded:Connect(function(j)if j.UserInputType==Enum.UserInputType.MouseButton1 or j.UserInputType==Enum.UserInputType.Touch then if self.holdTask then coroutine.close(self.holdTask)self.holdTask=nil end;self.initialPosition=nil end end)return self end;return a
+			local a={}a.__index=a;local b=game:GetService("UserInputService")function a.new(c,d)local self=setmetatable({},a)self.textButton=c;self.holdTime=d or 0.5;self.holdTask=nil;self.initialPosition=nil;self.Holded=Instance.new("BindableEvent")local function e(f,g)return math.sqrt((g.X-f.X)^2+(g.Y-f.Y)^2)end;AineRuntime.connect(self.textButton.MouseButton1Down, function(h,i)self.initialPosition=Vector2.new(h,i)self.holdTask=task.spawn(function()task.wait(self.holdTime)if self.holdTask then self.Holded:Fire()end end)end)AineRuntime.connect(b.InputChanged, function(j)if j.UserInputType==Enum.UserInputType.MouseMovement or j.UserInputType==Enum.UserInputType.Touch then if self.holdTask and self.initialPosition then local k=j.Position;local l=e(self.initialPosition,k)if l>10 then coroutine.close(self.holdTask)self.holdTask=nil end end end end)AineRuntime.connect(b.InputEnded, function(j)if j.UserInputType==Enum.UserInputType.MouseButton1 or j.UserInputType==Enum.UserInputType.Touch then if self.holdTask then coroutine.close(self.holdTask)self.holdTask=nil end;self.initialPosition=nil end end)return self end;return a
 		end
 		local ClickAndHold = ClickAndHoldf()
 		function PointSavef()
@@ -2124,7 +2274,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			-- Spring-based tweening module
 			-- Implementation by YARHM Team, respective credits towards the original creators for spring physics
 		
-			local a=function()local a=function()local a={}local function b(c,d,e,f,g,h)local i=d*d-4*e/c;local j=-0.5;local k=d+math.sqrt(i)local l=d-math.sqrt(i)local m,n=j*k,j*l;local o,p=(n*f-g)/(n-m),(m*f-g)/(m-n)local q=h/e;return{Offset=function(r)return o*math.exp(m*r)+p*math.exp(n*r)+q end,Velocity=function(r)return o*m*math.exp(m*r)+p*n*math.exp(n*r)end,Acceleration=function(r)return o*m*m*math.exp(m*r)+p*n*n*math.exp(n*r)end}end;local function s(c,d,e,f,g,h)local i=-d/2;local j,k=f,g-i*f;local l=h/e;return{Offset=function(m)return math.exp(i*m)*(j+k*m)+l end,Velocity=function(m)return math.exp(i*m)*(k*i*m+j*i+k)end,Acceleration=function(m)return i*math.exp(i*m)*(k*i*m+j*i+2*k)end}end;local function t(c,d,e,f,g,h)local i=d*d-4*e/c;local j=-d/2;local k=math.sqrt(-i)local l,m=f,(g-j*f)/k;local n=h/e;return{Offset=function(o)return math.exp(j*o)*(l*math.cos(k*o)+m*math.sin(k*o))+n end,Velocity=function(o)return-math.exp(j*o)*((l*k-m*j)*math.sin(k*o)+(-m*k-l*j)*math.cos(k*o))end,Acceleration=function(o)return-math.exp(j*o)*((m*k*k+2*l*j*k-m*j*j)*math.sin(k*o)+(l*k*k-2*m*j*k-l*j*j)*math.cos(k*o))end}end;function a.F(c)local d,e,f=c.InitialOffset,c.InitialVelocity,c.ExternalForce;local g,h,i=c.Mass,c.Damping,c.Constant;local j=h*h-4*i/g;if j>0 then return b(g,h,i,d,e,f)elseif j==0 then return s(g,h,i,d,e,f)else return t(g,h,i,d,e,f)end end;return a end;local c=a()local d=math.sqrt;local e=math.pi;local f={OFFSET="Offset",VELOCITY="Velocity",ACCELERATION="Acceleration",GOAL="Goal",FREQUENCY="Frequency"}local g=""local h=""local i={}local j={}j.__index=function(k,l)local m={[f.OFFSET]=function()local m=tick()-k.StartTick;local n=k.F;local o=n.Offset(m)return o end,[f.VELOCITY]=function()local m=tick()-k.StartTick;local n=k.F;local o=n.Velocity(m)return o end,[f.ACCELERATION]=function()local m=tick()-k.StartTick;local n=k.F;local o=n.Acceleration(m)return o end,[f.GOAL]=function()local m=k.ExternalForce;local n=k.Constant;return m/n end,[f.FREQUENCY]=function()local m=k.Damping;local n=k.Constant;local o=k.Mass;return d(-m*m+4*n/o)/(2*e)end}local n=rawget(k,l)if n~=nil then return n end;local o=m[l]if o~=nil then return o()end;return j[l]end;j.__tostring=function(k)local l=tick()-k.StartTick;local m=k.F;local n=k.AdvancedObjectStringEnabled;local o;if not n then o=string.format(g,m.Offset(l),m.Velocity(l),m.Acceleration(l))else o=string.format(h,k.Mass,k.Damping,k.Constant,k.Goal,k.Frequency,k.InitialOffset,k.InitialVelocity,k.ExternalForce,k.StartTick,m.Offset(l),m.Velocity(l),m.Acceleration(l))end;return o end;function i.fromDurationAndBounce(k,l)local m=1;local n=(2*math.pi/k)^2*m;local o=2*l*math.sqrt(m*n)return{m,o,n}end;function i.new(k,l,m,n,o,p)assert(k>0,"Mass for spring system cannot be less than or equal to 0")assert(m>0,"Spring constant for spring system cannot be less than or equal to 0")n=n or 0;o=o or 0;p=p or 0;local q=p*m;local r={Mass=k,Damping=l,Constant=m,InitialOffset=n-p,InitialVelocity=o,ExternalForce=q,AdvancedObjectStringEnabled=false,StartTick=0}setmetatable(r,j)r:Reset()return r end;function i.fromFrequency(k,l,m,n,o,p)assert(k>0,"Mass for spring system cannot be less than or equal to 0")assert(m>0,"Spring frequency for spring system cannot be less than or equal to 0")local q=0.25*k*(4*e*e*m*m+l*l)n=n or 0;o=o or 0;p=p or 0;local r=p*q;local u={Mass=k,Damping=l,Constant=q,InitialOffset=n-p,InitialVelocity=o,ExternalForce=r,AdvancedObjectStringEnabled=false,StartTick=0}setmetatable(u,j)u:Reset()return u end;function j.Reset(k)k.F=c.F(k)k.StartTick=tick()end;function j.SetExternalForce(k,l)k.ExternalForce=l;k.InitialOffset=k.Offset-l/k.Constant;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SetGoal(k,l)k.ExternalForce=l*k.Constant;k.InitialOffset=k.Offset-l;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SetFrequency(k,l)k.Constant=0.25*k.Mass*(4*e*e*l*l+k.Damping*k.Damping)k.InitialOffset=k.Offset;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SnapToCriticalDamping(k)k.Damping=2*d(k.Constant/k.Mass)k.InitialOffset=k.Offset;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SetOffset(k,l,m)k.InitialOffset=l-k.Goal;k.InitialVelocity=m and 0 or k.Velocity;k:Reset()end;function j.AddOffset(k,l)k.InitialOffset=k.Offset+l;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SetVelocity(k,l)k.InitialOffset=k.Offset;k.InitialVelocity=l;k:Reset()end;function j.AddVelocity(k,l)k.InitialOffset=k.Offset;k.InitialVelocity=k.Velocity+l;k:Reset()end;function j.Print(k)local l=tostring(k)print(l)end;return i end;local c=a()local d=game:GetService"RunService"local e={}e.__index=e;function e.fromDurationAndBounce(f,g)local h=1;local i=(2*math.pi/f)^2*h;local j=2*(1-g)*math.sqrt(h*i)return{h,j,i}end;local f={number=function(f,g,h,i,j)local k=c.new(h,i,j,f[g],0,f[g])return{springType="number",springSet={k},updateFunc=function()f[g]=k.Offset end,setGoal=function(l)k:SetGoal(l)end}end,UDim2=function(f,g,h,i,j)local k=c.new(h,i,j,f[g].X.Offset,0,f[g].X.Offset)local l=c.new(h,i,j,f[g].X.Scale,0,f[g].X.Scale)local m=c.new(h,i,j,f[g].Y.Offset,0,f[g].Y.Offset)local n=c.new(h,i,j,f[g].Y.Scale,0,f[g].Y.Scale)return{springType="UDim2",springSet={XOffset=k,XScale=l,YOffset=m,YScale=n},updateFunc=function()f[g]=UDim2.new(l.Offset,k.Offset,n.Offset,m.Offset)end,setGoal=function(o)k:SetGoal(o.X.Offset)l:SetGoal(o.X.Scale)m:SetGoal(o.Y.Offset)n:SetGoal(o.Y.Scale)end}end,Vector2=function(f,g,h,i,j)local k=c.new(h,i,j,f[g].X,0,f[g].X)local l=c.new(h,i,j,f[g].Y,0,f[g].Y)return{springType="Vector2",springSet={X=k,Y=l},updateFunc=function()f[g]=Vector2.new(k.Offset,l.Offset)end,setGoal=function(m)k:SetGoal(m.X)l:SetGoal(m.Y)end}end,Vector3=function(f,g,h,i,j)local k=c.new(h,i,j,f[g].X,0,f[g].X)local l=c.new(h,i,j,f[g].Y,0,f[g].Y)local m=c.new(h,i,j,f[g].Z,0,f[g].Z)return{springType="Vector3",springSet={k,l,m},updateFunc=function()f[g]=Vector3.new(k.Offset,l.Offset,m.Offset)end,setGoal=function(n)k:SetTarget(n.X)l:SetTarget(n.Y)m:SetTarget(n.Z)end}end}function e.new(g,h,i,j,k)assert(g[h],"Property does not exist on object")local l=typeof(g[h])local m=f[l]if m then local n=setmetatable({},e)n.obj=g;n.propertyName=h;n.updater=nil;local o=m(g,h,i,j,k)n.springType=o.springType;n.springSet=o.springSet;n.updateFunc=o.updateFunc;n.setGoal=o.setGoal;return n else error("Type not supported: "..l)end end;function e.Start(g)if g.updater then return end;for h,i in pairs(g.springSet)do i:Reset()end;g.updater=d.RenderStepped:Connect(function(h)g.updateFunc()end)end;function e.Stop(g)if g.updater then g.updater:Disconnect()g.updater=nil end end;function e.SetGoal(g,h)g.setGoal(h)end;function e.SetParameters(g,h,i,j)for k,l in pairs(g.springSet)do l.Mass=h;l.Stiffness=i;l.Damping=j;l:Reset()end end;return e
+			local a=function()local a=function()local a={}local function b(c,d,e,f,g,h)local i=d*d-4*e/c;local j=-0.5;local k=d+math.sqrt(i)local l=d-math.sqrt(i)local m,n=j*k,j*l;local o,p=(n*f-g)/(n-m),(m*f-g)/(m-n)local q=h/e;return{Offset=function(r)return o*math.exp(m*r)+p*math.exp(n*r)+q end,Velocity=function(r)return o*m*math.exp(m*r)+p*n*math.exp(n*r)end,Acceleration=function(r)return o*m*m*math.exp(m*r)+p*n*n*math.exp(n*r)end}end;local function s(c,d,e,f,g,h)local i=-d/2;local j,k=f,g-i*f;local l=h/e;return{Offset=function(m)return math.exp(i*m)*(j+k*m)+l end,Velocity=function(m)return math.exp(i*m)*(k*i*m+j*i+k)end,Acceleration=function(m)return i*math.exp(i*m)*(k*i*m+j*i+2*k)end}end;local function t(c,d,e,f,g,h)local i=d*d-4*e/c;local j=-d/2;local k=math.sqrt(-i)local l,m=f,(g-j*f)/k;local n=h/e;return{Offset=function(o)return math.exp(j*o)*(l*math.cos(k*o)+m*math.sin(k*o))+n end,Velocity=function(o)return-math.exp(j*o)*((l*k-m*j)*math.sin(k*o)+(-m*k-l*j)*math.cos(k*o))end,Acceleration=function(o)return-math.exp(j*o)*((m*k*k+2*l*j*k-m*j*j)*math.sin(k*o)+(l*k*k-2*m*j*k-l*j*j)*math.cos(k*o))end}end;function a.F(c)local d,e,f=c.InitialOffset,c.InitialVelocity,c.ExternalForce;local g,h,i=c.Mass,c.Damping,c.Constant;local j=h*h-4*i/g;if j>0 then return b(g,h,i,d,e,f)elseif j==0 then return s(g,h,i,d,e,f)else return t(g,h,i,d,e,f)end end;return a end;local c=a()local d=math.sqrt;local e=math.pi;local f={OFFSET="Offset",VELOCITY="Velocity",ACCELERATION="Acceleration",GOAL="Goal",FREQUENCY="Frequency"}local g=""local h=""local i={}local j={}j.__index=function(k,l)local m={[f.OFFSET]=function()local m=tick()-k.StartTick;local n=k.F;local o=n.Offset(m)return o end,[f.VELOCITY]=function()local m=tick()-k.StartTick;local n=k.F;local o=n.Velocity(m)return o end,[f.ACCELERATION]=function()local m=tick()-k.StartTick;local n=k.F;local o=n.Acceleration(m)return o end,[f.GOAL]=function()local m=k.ExternalForce;local n=k.Constant;return m/n end,[f.FREQUENCY]=function()local m=k.Damping;local n=k.Constant;local o=k.Mass;return d(-m*m+4*n/o)/(2*e)end}local n=rawget(k,l)if n~=nil then return n end;local o=m[l]if o~=nil then return o()end;return j[l]end;j.__tostring=function(k)local l=tick()-k.StartTick;local m=k.F;local n=k.AdvancedObjectStringEnabled;local o;if not n then o=string.format(g,m.Offset(l),m.Velocity(l),m.Acceleration(l))else o=string.format(h,k.Mass,k.Damping,k.Constant,k.Goal,k.Frequency,k.InitialOffset,k.InitialVelocity,k.ExternalForce,k.StartTick,m.Offset(l),m.Velocity(l),m.Acceleration(l))end;return o end;function i.fromDurationAndBounce(k,l)local m=1;local n=(2*math.pi/k)^2*m;local o=2*l*math.sqrt(m*n)return{m,o,n}end;function i.new(k,l,m,n,o,p)assert(k>0,"Mass for spring system cannot be less than or equal to 0")assert(m>0,"Spring constant for spring system cannot be less than or equal to 0")n=n or 0;o=o or 0;p=p or 0;local q=p*m;local r={Mass=k,Damping=l,Constant=m,InitialOffset=n-p,InitialVelocity=o,ExternalForce=q,AdvancedObjectStringEnabled=false,StartTick=0}setmetatable(r,j)r:Reset()return r end;function i.fromFrequency(k,l,m,n,o,p)assert(k>0,"Mass for spring system cannot be less than or equal to 0")assert(m>0,"Spring frequency for spring system cannot be less than or equal to 0")local q=0.25*k*(4*e*e*m*m+l*l)n=n or 0;o=o or 0;p=p or 0;local r=p*q;local u={Mass=k,Damping=l,Constant=q,InitialOffset=n-p,InitialVelocity=o,ExternalForce=r,AdvancedObjectStringEnabled=false,StartTick=0}setmetatable(u,j)u:Reset()return u end;function j.Reset(k)k.F=c.F(k)k.StartTick=tick()end;function j.SetExternalForce(k,l)k.ExternalForce=l;k.InitialOffset=k.Offset-l/k.Constant;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SetGoal(k,l)k.ExternalForce=l*k.Constant;k.InitialOffset=k.Offset-l;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SetFrequency(k,l)k.Constant=0.25*k.Mass*(4*e*e*l*l+k.Damping*k.Damping)k.InitialOffset=k.Offset;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SnapToCriticalDamping(k)k.Damping=2*d(k.Constant/k.Mass)k.InitialOffset=k.Offset;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SetOffset(k,l,m)k.InitialOffset=l-k.Goal;k.InitialVelocity=m and 0 or k.Velocity;k:Reset()end;function j.AddOffset(k,l)k.InitialOffset=k.Offset+l;k.InitialVelocity=k.Velocity;k:Reset()end;function j.SetVelocity(k,l)k.InitialOffset=k.Offset;k.InitialVelocity=l;k:Reset()end;function j.AddVelocity(k,l)k.InitialOffset=k.Offset;k.InitialVelocity=k.Velocity+l;k:Reset()end;function j.Print(k)local l=tostring(k)print(l)end;return i end;local c=a()local d=game:GetService"RunService"local e={}e.__index=e;function e.fromDurationAndBounce(f,g)local h=1;local i=(2*math.pi/f)^2*h;local j=2*(1-g)*math.sqrt(h*i)return{h,j,i}end;local f={number=function(f,g,h,i,j)local k=c.new(h,i,j,f[g],0,f[g])return{springType="number",springSet={k},updateFunc=function()f[g]=k.Offset end,setGoal=function(l)k:SetGoal(l)end}end,UDim2=function(f,g,h,i,j)local k=c.new(h,i,j,f[g].X.Offset,0,f[g].X.Offset)local l=c.new(h,i,j,f[g].X.Scale,0,f[g].X.Scale)local m=c.new(h,i,j,f[g].Y.Offset,0,f[g].Y.Offset)local n=c.new(h,i,j,f[g].Y.Scale,0,f[g].Y.Scale)return{springType="UDim2",springSet={XOffset=k,XScale=l,YOffset=m,YScale=n},updateFunc=function()f[g]=UDim2.new(l.Offset,k.Offset,n.Offset,m.Offset)end,setGoal=function(o)k:SetGoal(o.X.Offset)l:SetGoal(o.X.Scale)m:SetGoal(o.Y.Offset)n:SetGoal(o.Y.Scale)end}end,Vector2=function(f,g,h,i,j)local k=c.new(h,i,j,f[g].X,0,f[g].X)local l=c.new(h,i,j,f[g].Y,0,f[g].Y)return{springType="Vector2",springSet={X=k,Y=l},updateFunc=function()f[g]=Vector2.new(k.Offset,l.Offset)end,setGoal=function(m)k:SetGoal(m.X)l:SetGoal(m.Y)end}end,Vector3=function(f,g,h,i,j)local k=c.new(h,i,j,f[g].X,0,f[g].X)local l=c.new(h,i,j,f[g].Y,0,f[g].Y)local m=c.new(h,i,j,f[g].Z,0,f[g].Z)return{springType="Vector3",springSet={k,l,m},updateFunc=function()f[g]=Vector3.new(k.Offset,l.Offset,m.Offset)end,setGoal=function(n)k:SetTarget(n.X)l:SetTarget(n.Y)m:SetTarget(n.Z)end}end}function e.new(g,h,i,j,k)assert(g[h],"Property does not exist on object")local l=typeof(g[h])local m=f[l]if m then local n=setmetatable({},e)n.obj=g;n.propertyName=h;n.updater=nil;local o=m(g,h,i,j,k)n.springType=o.springType;n.springSet=o.springSet;n.updateFunc=o.updateFunc;n.setGoal=o.setGoal;return n else error("Type not supported: "..l)end end;function e.Start(g)if g.updater then return end;for h,i in pairs(g.springSet)do i:Reset()end;g.updater=AineRuntime.connect(d.RenderStepped, function(h)g.updateFunc()end)end;function e.Stop(g)if g.updater then g.updater:Disconnect()g.updater=nil end end;function e.SetGoal(g,h)g.setGoal(h)end;function e.SetParameters(g,h,i,j)for k,l in pairs(g.springSet)do l.Mass=h;l.Stiffness=i;l.Damping=j;l:Reset()end end;return e
 		end
 		local SBT = SBTf()
 		
@@ -2264,7 +2414,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			incomingNotif = true
 			task.spawn(function()
 				s = tostring(s)
-				local notif = script.Parent.NotificationSample:Clone()
+				local notif = AineRuntime.clone(script.Parent.NotificationSample)
 				notif.Parent = script.Parent
 				notif.Position = UDim2.fromScale(0.5, -0.1)
 				notif.UIScale.Scale = 0.5
@@ -2289,19 +2439,19 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				notif.TextLabel.MaxVisibleGraphemes = 0
 				notif.TextLabel.Text = s
 				notif:SetAttribute("close", false)
-				ts:Create(notif, TweenInfo.new(0.7, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, notif, TweenInfo.new(0.7, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					Position = UDim2.new(0.5, 0, 0, 10)
 				}):Play()
 		
-				ts:Create(notif.UIScale, TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, notif.UIScale, TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					Scale = 0.8
 				}):Play()
 		
-				ts:Create(notif.TextLabel, TweenInfo.new(0.7, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, notif.TextLabel, TweenInfo.new(0.7, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					MaxVisibleGraphemes = #s
 				}):Play()
 		
-				notif.Close.MouseButton1Click:Connect(function()
+				AineRuntime.connect(notif.Close.MouseButton1Click, function()
 					notif:SetAttribute("close", true)
 				end)
 		
@@ -2310,11 +2460,11 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				local lastclock = os.clock()
 				repeat task.wait() until os.clock()-lastclock > 5 or incomingNotif or notif:GetAttribute("close")
 		
-				local finish = ts:Create(notif, TweenInfo.new(0.3, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+				local finish = AineRuntime.create(ts, notif, TweenInfo.new(0.3, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					Position = UDim2.fromScale(0.5, -0.1)
 				})
 				finish:Play()
-				finish.Completed:Connect(function()
+				AineRuntime.connect(finish.Completed, function()
 					notif:Destroy()
 				end)
 			end)
@@ -2329,20 +2479,20 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			for _, b in ipairs(script.Parent.FloatingButtons:GetChildren()) do
 				if b:IsA("TextButton") and b:FindFirstChildWhichIsA("UIScale") then
 					local buttonScale = b:FindFirstChildWhichIsA("UIScale")
-					ts:Create(buttonScale, TweenInfo.new(0.3), {
+					AineRuntime.create(ts, buttonScale, TweenInfo.new(0.3), {
 						Scale = 1
 					}):Play()
 				end
 			end
 		
 			local buttonScale = getgenv().fBSFButton:FindFirstChildWhichIsA("UIScale") or Instance.new("UIScale", getgenv().fBSFButton)
-			ts:Create(buttonScale, TweenInfo.new(0.3), {
+			AineRuntime.create(ts, buttonScale, TweenInfo.new(0.3), {
 				Scale = 0
 			}):Play()
-			ts:Create(fBSF, TweenInfo.new(0.3), {
+			AineRuntime.create(ts, fBSF, TweenInfo.new(0.3), {
 				BackgroundTransparency = 1
 			}):Play()
-			local done = ts:Create(fBSF.ControlBarContainer.UIScale, TweenInfo.new(0.3), {
+			local done = AineRuntime.create(ts, fBSF.ControlBarContainer.UIScale, TweenInfo.new(0.3), {
 				Scale = 0
 			})
 			done:Play()
@@ -2366,13 +2516,13 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			for _, b in ipairs(script.Parent.FloatingButtons:GetChildren()) do
 				if b:IsA("TextButton") and b:FindFirstChildWhichIsA("UIScale") then
 					local buttonScale = b:FindFirstChildWhichIsA("UIScale")
-					ts:Create(buttonScale, TweenInfo.new(0.3), {
+					AineRuntime.create(ts, buttonScale, TweenInfo.new(0.3), {
 						Scale = 0
 					}):Play()
 				end
 			end
 		
-			local finetuningButton = button:Clone()
+			local finetuningButton = AineRuntime.clone(button)
 			getgenv().fBSFButton = finetuningButton
 			finetuningButton.Parent = fBSF
 			finetuningButton.Name = "fBSFButton"
@@ -2388,7 +2538,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			end
 			fBSFResizeDragger.Dragged = function(pos)
 				local newSize =  UDim2.fromOffset(math.clamp(startingSize.X.Offset + pos.X.Offset, 30, 500), math.clamp(startingSize.Y.Offset + pos.Y.Offset, 10, 350))
-				ts:Create(finetuningButton, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, finetuningButton, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 					Size = newSize
 				}):Play()
 				button.Size = newSize
@@ -2399,24 +2549,24 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			fBSF.ControlBarContainer.UIScale.Scale = 0
 			fBSF.BackgroundTransparency = 1
 			fBSF.Visible = true
-			ts:Create(fBSF, TweenInfo.new(0.3), {
+			AineRuntime.create(ts, fBSF, TweenInfo.new(0.3), {
 				BackgroundTransparency = 0.5
 			}):Play()
-			ts:Create(fBSF.ControlBarContainer.UIScale, TweenInfo.new(0.8, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts, fBSF.ControlBarContainer.UIScale, TweenInfo.new(0.8, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 				Scale = 1
 			}):Play()
-			ts:Create(finetuningButton, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts, finetuningButton, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5)
 			}):Play()
 		
 			if finetuningButton.BackgroundTransparency == 1 then
 				finetuningButton.Lock.TextTransparency = 0
-				ts:Create(finetuningButton, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+				AineRuntime.create(ts, finetuningButton, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
 					BackgroundTransparency = 0.5,
 					TextTransparency = 0.5
 				}):Play()
-				ts:Create(finetuningButton.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+				AineRuntime.create(ts, finetuningButton.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
 					Transparency = 0.5
 				}):Play()
 			end
@@ -2428,13 +2578,13 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			if getgenv().fBSF_ButtonDragger.CanBeDragged then
 				getgenv().fBSF_ButtonDragger:Disable()
 				getgenv().fBSFRealButton.Lock.UIScale.Scale = 1
-				ts:Create(getgenv().fBSFButton.Lock.UIScale, TweenInfo.new(0.8, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, getgenv().fBSFButton.Lock.UIScale, TweenInfo.new(0.8, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 					Scale = 1
 				}):Play()
 			else
 				getgenv().fBSF_ButtonDragger:Enable()
 				getgenv().fBSFRealButton.Lock.UIScale.Scale = 0
-				ts:Create(getgenv().fBSFButton.Lock.UIScale, TweenInfo.new(0.3), {
+				AineRuntime.create(ts, getgenv().fBSFButton.Lock.UIScale, TweenInfo.new(0.3), {
 					Scale = 0
 				}):Play()
 			end
@@ -2448,11 +2598,11 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				getgenv().fBSFRealButton.UIStroke.Transparency = 1
 				getgenv().fBSFRealButton.Lock.TextTransparency = 1
 		
-				ts:Create(getgenv().fBSFButton, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+				AineRuntime.create(ts, getgenv().fBSFButton, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
 					BackgroundTransparency = 0.5,
 					TextTransparency = 0.5
 				}):Play()
-				ts:Create(getgenv().fBSFButton.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+				AineRuntime.create(ts, getgenv().fBSFButton.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
 					Transparency = 0.5
 				}):Play()
 			else
@@ -2461,11 +2611,11 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				getgenv().fBSFRealButton.UIStroke.Transparency = 0
 				getgenv().fBSFRealButton.Lock.TextTransparency = 0
 		
-				ts:Create(getgenv().fBSFButton, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+				AineRuntime.create(ts, getgenv().fBSFButton, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
 					BackgroundTransparency = 0,
 					TextTransparency = 0
 				}):Play()
-				ts:Create(getgenv().fBSFButton.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+				AineRuntime.create(ts, getgenv().fBSFButton.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
 					Transparency = 0
 				}):Play()
 			end
@@ -2481,7 +2631,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 					YARHMPointSave:set(string.gsub(buttonname, "_", ""), udim2Serializer(UDim2.fromOffset(125, 90)) .. "|" .. udim2Serializer(UDim2.fromOffset(200,50)) .. "|true|true")
 				end
 		
-				local newFloatingButton = getgenv().YARHM.FloatingButton:Clone()
+				local newFloatingButton = AineRuntime.clone(getgenv().YARHM.FloatingButton)
 				newFloatingButton.Parent = getgenv().YARHM.FloatingButtons
 				
 				newFloatingButton.Name = string.gsub(buttonname, "_", "")
@@ -2498,7 +2648,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				table.insert(floatingButtonObjects, newFloatingButton)
 				local floatingButtonObjectSelf = floatingButtonObjects[#floatingButtonObjects]
 		
-				newFloatingButton.MouseButton1Click:Connect(function()
+				AineRuntime.connect(newFloatingButton.MouseButton1Click, function()
 					if typeof(item["Args"][2]) == "function" then
 						item["Args"][2](button)
 					else
@@ -2508,17 +2658,17 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				
 				local ripple
 				
-				newFloatingButton.MouseButton1Down:Connect(function(x, y)
-					ts:Create(newFloatingButton.UIScale, TweenInfo.new(0.1), {
+				AineRuntime.connect(newFloatingButton.MouseButton1Down, function(x, y)
+					AineRuntime.create(ts, newFloatingButton.UIScale, TweenInfo.new(0.1), {
 						Scale = 0.95
 					}):Play()
 					
 					
-					ripple = newFloatingButton.Ripple:Clone()
+					ripple = AineRuntime.clone(newFloatingButton.Ripple)
 					ripple.BackgroundColor3 = FUNCTIONSmodule.getTheme().textColor
 					ripple.Parent = newFloatingButton
 					ripple.Position = UDim2.fromOffset(x - newFloatingButton.AbsolutePosition.X, (y - newFloatingButton.AbsolutePosition.Y) - game:GetService("GuiService"):GetGuiInset().Y)
-					ts:Create(ripple, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+					AineRuntime.create(ts, ripple, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 						BackgroundTransparency = 0.6,
 						Size = UDim2.fromOffset(50, 50)
 					}):Play()
@@ -2527,7 +2677,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				
 				local function closeRipple()
 					if not getgenv().fBSFRealButton then
-						ts:Create(newFloatingButton.UIScale, TweenInfo.new(0.1), {
+						AineRuntime.create(ts, newFloatingButton.UIScale, TweenInfo.new(0.1), {
 							Scale = 1
 						}):Play()
 					end
@@ -2535,18 +2685,18 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 					if ripple then
 						task.spawn(function()
 							local rippleToRemove = ripple
-							local fade = ts:Create(rippleToRemove, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+							local fade = AineRuntime.create(ts, rippleToRemove, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 								BackgroundTransparency = 1,
 								Size = UDim2.fromOffset(150, 150)
 							})
 							fade:Play()
-							fade.Completed:Once(function()
+							AineRuntime.once(fade.Completed, function()
 								rippleToRemove:Destroy()
 							end)
 						end)
 					end
 				end
-				UserInputService.InputEnded:Connect(function(input)
+				AineRuntime.connect(UserInputService.InputEnded, function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then 
 						closeRipple()
 					end
@@ -2558,7 +2708,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				elseif YARHMPointSave:get(string.gsub(buttonname, "_", "")) then
 					local data = YARHMPointSave:get(string.gsub(buttonname, "_", "")):split("|")
 					newFloatingButton.Position = udim2Serializer(data[1])
-					ts:Create(newFloatingButton, TweenInfo.new(2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
+					AineRuntime.create(ts, newFloatingButton, TweenInfo.new(2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
 						Size = udim2Serializer(data[2])
 					}):Play()
 					newFloatingButton.Visible = (data[3] == "true")
@@ -2570,10 +2720,10 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 		
 				task.spawn(function()
 					if not fromload then
-						ts:Create(newFloatingButton, TweenInfo.new(2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
+						AineRuntime.create(ts, newFloatingButton, TweenInfo.new(2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
 							Size = UDim2.fromOffset(200, 50)
 						}):Play()
-						ts:Create(newFloatingButton, TweenInfo.new(0.7, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+						AineRuntime.create(ts, newFloatingButton, TweenInfo.new(0.7, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 							Position = UDim2.fromOffset(125, 90)
 						}):Play()
 					end
@@ -2588,7 +2738,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				end
 		
 				local holder = ClickAndHold.new(newFloatingButton)
-				holder.Holded.Event:Connect(function()
+				AineRuntime.connect(holder.Holded.Event, function()
 					if floatingButtonDraggers[string.gsub(buttonname, "_", "")].Dragging then return end
 					if ripple then
 						ripple:Destroy()
@@ -2596,7 +2746,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 					FUNCTIONSmodule.finetuneFloatingButton(floatingButtonObjectSelf, floatingButtonDraggers[string.gsub(buttonname, "_", "")])
 				end)
 		
-				newFloatingButton.InputBegan:Connect(function(input)
+				AineRuntime.connect(newFloatingButton.InputBegan, function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton2 then
 						FUNCTIONSmodule.notification("Press a key to bind " .. string.gsub(buttonname, "_", "") .. " to...")
 						local keytobind
@@ -2613,7 +2763,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 		
 				local uis = game:GetService("UserInputService")
 				if uis.KeyboardEnabled and uis.MouseEnabled then
-					floatingButtonConnections[string.gsub(buttonname, "_", "")] = uis.InputBegan:Connect(function(inp, processed)
+					floatingButtonConnections[string.gsub(buttonname, "_", "")] = AineRuntime.connect(uis.InputBegan, function(inp, processed)
 						if processed then return end
 						if inp.KeyCode == floatingButtonKeybinds[string.gsub(buttonname, "_", "")] then
 							if typeof(item["Args"][2]) == "function" then
@@ -2633,7 +2783,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				YARHMPointSave:remove(string.gsub(buttonname, "_", ""))
 				task.spawn(function()
 					local buttontodestroy = getgenv().YARHM.FloatingButtons:FindFirstChild(string.gsub(buttonname, "_", ""))
-					local btdtween = ts:Create(buttontodestroy, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+					local btdtween = AineRuntime.create(ts, buttontodestroy, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 						Size = UDim2.new(0,0,0,0)
 					})
 					btdtween:Play()
@@ -2672,10 +2822,10 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			local AREAframes = {}
 			for _, i in ipairs(AREA:GetChildren()) do if i:IsA("Frame") then table.insert(AREAframes, i) end end
 			if #AREAframes > 5 then
-				ts:Create(AREA, TweenInfo.new(0.1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), { CanvasPosition = Vector2.zero }):Play()
+				AineRuntime.create(ts, AREA, TweenInfo.new(0.1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), { CanvasPosition = Vector2.zero }):Play()
 				for i=1, math.min(7, #AREAframes) do
 					task.wait(0.01)
-					ts:Create(AREAframes[i]:GetChildren()[1], TweenInfo.new(0.2, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), {
+					AineRuntime.create(ts, AREAframes[i]:GetChildren()[1], TweenInfo.new(0.2, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), {
 						Position = UDim2.fromScale(2, 0)
 					}):Play()
 				end
@@ -2686,13 +2836,13 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			
 			if not adState then
 				adState = true
-				ts:Create(script.Parent.Menu.Ad, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+				AineRuntime.create(ts, script.Parent.Menu.Ad, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
 					AnchorPoint = Vector2.new(1,0),
 					Position = UDim2.fromScale(1,0),
 					Size = UDim2.new(0.68, 0, 0.18, 0)
 				}):Play()
 				
-				ts:Create(script.Parent.Menu.Ad.UICorner, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
+				AineRuntime.create(ts, script.Parent.Menu.Ad.UICorner, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut), {
 					BottomLeftRadius = UDim.new(0, 8),
 					BottomRightRadius = UDim.new(0, 0),
 					TopLeftRadius = UDim.new(0, 0),
@@ -2734,7 +2884,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 		
 				elseif item["Type"] == "Button" then
 					
-					local button = getgenv().YARHM.MenuButton:Clone()
+					local button = AineRuntime.clone(getgenv().YARHM.MenuButton)
 					button.Visible = true
 					
 					button.Parent = frameHolder
@@ -2763,12 +2913,12 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 		
 					local hold = false
 		
-					button.MouseButton1Click:Connect(function()
+					AineRuntime.connect(button.MouseButton1Click, function()
 						item["Args"][2](button)
 					end)
 					
 					local cah = ClickAndHold.new(button, 0.5)
-					cah.Holded.Event:Connect(function()
+					AineRuntime.connect(cah.Holded.Event, function()
 						FUNCTIONSmodule.createFloatingButton(item, button, item["Args"][1])
 					end)
 		
@@ -2816,17 +2966,17 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 		
 						Instance.new("UICorner", button).CornerRadius = UDim.new(1, 0)
 		
-						button.MouseButton1Click:Connect(function()
+						AineRuntime.connect(button.MouseButton1Click, function()
 							if item["Toggleable"] then
 								item["Args"][2][buttonname](button)
 								--print(States[buttonname .. module.Name])
 								if States[buttonname .. module.Name] then
-									ts:Create(button, TweenInfo.new(0.3), {
+									AineRuntime.create(ts, button, TweenInfo.new(0.3), {
 										BackgroundColor3 = FUNCTIONSmodule.getTheme().primaryColor
 									}):Play()
 									States[buttonname .. module.Name] = false
 								else
-									ts:Create(button, TweenInfo.new(0.3), {
+									AineRuntime.create(ts, button, TweenInfo.new(0.3), {
 										BackgroundColor3 = FUNCTIONSmodule.getTheme().accentColor
 									}):Play()
 									States[buttonname .. module.Name] = true
@@ -2837,14 +2987,14 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 						end)
 		
 						local cah = ClickAndHold.new(button, 0.5)
-						cah.Holded.Event:Connect(function()
+						AineRuntime.connect(cah.Holded.Event, function()
 							FUNCTIONSmodule.createFloatingButton(item, button, buttonname)
 						end)
 					end
 		
 		
 				elseif item["Type"] == "Input" then
-					local cloneinput = getgenv().YARHM.TextBoxPlaceholder:Clone()
+					local cloneinput = AineRuntime.clone(getgenv().YARHM.TextBoxPlaceholder)
 					cloneinput.Parent = frameHolder
 					cloneinput.Visible = true
 					
@@ -2858,11 +3008,11 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 					cloneinput.TextButton.BackgroundColor3 = FUNCTIONSmodule.getTheme().primaryColor
 		
 		
-					cloneinput.TextButton.MouseButton1Click:Connect(function()
+					AineRuntime.connect(cloneinput.TextButton.MouseButton1Click, function()
 						item["Args"][3](cloneinput.TextButton, cloneinput.TextBox.Text)
 					end)
 				elseif item["Type"] == "Toggle" then
-					local clonetoggle = getgenv().YARHM.Toggle:Clone()
+					local clonetoggle = AineRuntime.clone(getgenv().YARHM.Toggle)
 					clonetoggle.Parent = frameHolder
 					clonetoggle.Visible = true
 		
@@ -2886,42 +3036,42 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 						clonetoggletoggler.ImageLabel.ImageTransparency = 0
 					end
 		
-					clonetoggletoggler.MouseButton1Click:Connect(function()
+					AineRuntime.connect(clonetoggletoggler.MouseButton1Click, function()
 						if toggleStates[item["Args"][1] .. module.Name] then
 							toggleStates[item["Args"][1] .. module.Name] = false
-							ts:Create(clonetoggletoggler, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+							AineRuntime.create(ts, clonetoggletoggler, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 								Position = UDim2.fromScale(0, 0.5),
 								AnchorPoint = Vector2.new(0, 0.5)
 							}):Play()
-							ts:Create(clonetoggletoggler.ImageLabel, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+							AineRuntime.create(ts, clonetoggletoggler.ImageLabel, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 								ImageTransparency = 1
 							}):Play()
 						else
 							toggleStates[item["Args"][1] .. module.Name] = true
-							ts:Create(clonetoggletoggler, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+							AineRuntime.create(ts, clonetoggletoggler, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 								Position = UDim2.fromScale(1, 0.5),
 								AnchorPoint = Vector2.new(1, 0.5)
 							}):Play()
-							ts:Create(clonetoggletoggler.ImageLabel, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+							AineRuntime.create(ts, clonetoggletoggler.ImageLabel, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 								ImageTransparency = 0
 							}):Play()
 						end
 						item["Args"][2](clonetoggletoggler, toggleStates[item["Args"][1] .. module.Name])
 					end)
 				elseif item["Type"] == "Dropdown" then	
-					local clonedropdown = getgenv().YARHM.Dropdown:Clone()
+					local clonedropdown = AineRuntime.clone(getgenv().YARHM.Dropdown)
 					local dropdownFrame = getgenv().YARHM.DropdownFrameSample
 					clonedropdown.Parent = frameHolder
 					clonedropdown.Visible = true
 		
 					clonedropdown.TextLabel.Text = item["Args"][1]
-					clonedropdown.Frame.MouseButton1Click:Connect(function()
+					AineRuntime.connect(clonedropdown.Frame.MouseButton1Click, function()
 						for _, v in ipairs(dropdownFrame.ScrollingFrame:GetChildren()) do if v:IsA("TextButton") and v.Name ~= "Sample" then v:Destroy() end end
 						local mouse = game.Players.LocalPlayer:GetMouse()
 						dropdownFrame.Position = UDim2.fromOffset(mouse.X, mouse.Y - 55)
 						dropdownFrame.Size = UDim2.new(0,108/2,0,0)
 						dropdownFrame.Visible = true
-						ts:Create(dropdownFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+						AineRuntime.create(ts, dropdownFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 							Size = UDim2.fromOffset(108, 239)
 						}):Play()
 		
@@ -2933,27 +3083,27 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 						end
 		
 						for _, v in ipairs(items) do
-							local clonedropdownbutton = dropdownFrame.ScrollingFrame.Sample:Clone()
+							local clonedropdownbutton = AineRuntime.clone(dropdownFrame.ScrollingFrame.Sample)
 							clonedropdownbutton.Parent = dropdownFrame.ScrollingFrame
 							clonedropdownbutton.Name = v
 							clonedropdownbutton.Visible = true
 							clonedropdownbutton.Text = v
-							clonedropdownbutton.MouseButton1Click:Connect(function()
+							AineRuntime.connect(clonedropdownbutton.MouseButton1Click, function()
 								--dropdownFrame.Visible = false
 								clonedropdown.Frame.Text = v
 								item["Args"][3](clonedropdown.Frame, v)
-								local after = ts:Create(dropdownFrame, TweenInfo.new(0.1, Enum.EasingStyle.Circular, Enum.EasingDirection.Out), {
+								local after = AineRuntime.create(ts, dropdownFrame, TweenInfo.new(0.1, Enum.EasingStyle.Circular, Enum.EasingDirection.Out), {
 									Size = UDim2.fromOffset(108/2, 0)
 								})
 								after:Play()
-								after.Completed:Once(function()
+								AineRuntime.once(after.Completed, function()
 									dropdownFrame.Visible = false
 								end)
 							end)
 						end
 					end)
 				elseif item["Type"] == "Range" then
-					local clonerange = getgenv().YARHM.Range:Clone()
+					local clonerange = AineRuntime.clone(getgenv().YARHM.Range)
 					clonerange.Parent = frameHolder
 					clonerange.Visible = true
 		
@@ -2997,20 +3147,20 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 						clonerange.Frame.Track.Ball.BallProgress.Text = roundNumber(resolvedVal, 2)
 						clonerange.Frame.Track.TrackProgress.Text = tostring(resolvedVal, 2)
 						if resolvedVal > item["Args"][3] / 2 then
-							ts:Create(clonerange.Frame.Track.Ball.BallProgress, TweenInfo.new(0.2), {
+							AineRuntime.create(ts, clonerange.Frame.Track.Ball.BallProgress, TweenInfo.new(0.2), {
 								TextTransparency = 0,
 								TextStrokeTransparency = 0
 							}):Play()
-							ts:Create(clonerange.Frame.Track.TrackProgress, TweenInfo.new(0.2), {
+							AineRuntime.create(ts, clonerange.Frame.Track.TrackProgress, TweenInfo.new(0.2), {
 								TextTransparency = 1,
 								TextStrokeTransparency = 1
 							}):Play()
 						else
-							ts:Create(clonerange.Frame.Track.Ball.BallProgress, TweenInfo.new(0.2), {
+							AineRuntime.create(ts, clonerange.Frame.Track.Ball.BallProgress, TweenInfo.new(0.2), {
 								TextTransparency = 1,
 								TextStrokeTransparency = 1
 							}):Play()
-							ts:Create(clonerange.Frame.Track.TrackProgress, TweenInfo.new(0.2), {
+							AineRuntime.create(ts, clonerange.Frame.Track.TrackProgress, TweenInfo.new(0.2), {
 								TextTransparency = 0,
 								TextStrokeTransparency = 0
 							}):Play()
@@ -3025,11 +3175,11 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 					
 					slider.DragEnded = function()
 						relativeSlide = nil
-						ts:Create(clonerange.Frame.Track.Ball.BallProgress, TweenInfo.new(0.2), {
+						AineRuntime.create(ts, clonerange.Frame.Track.Ball.BallProgress, TweenInfo.new(0.2), {
 							TextTransparency = 1,
 							TextStrokeTransparency = 1
 						}):Play()
-						ts:Create(clonerange.Frame.Track.TrackProgress, TweenInfo.new(0.2), {
+						AineRuntime.create(ts, clonerange.Frame.Track.TrackProgress, TweenInfo.new(0.2), {
 							TextTransparency = 1,
 							TextStrokeTransparency = 1
 						}):Play()
@@ -3046,18 +3196,18 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			--	AREACONTAINER:FindFirstChildWhichIsA("UIListLayout"):Destroy()
 			--end -- idk where this instance coming from sorry
 			AREACONTAINER.Area.Position = UDim2.fromScale(0.5, 0.5)
-			ts:Create(AREACONTAINER.Area, TweenInfo.new(0.6, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts, AREACONTAINER.Area, TweenInfo.new(0.6, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
 				Position = UDim2.fromScale(0.5, 0.5)
 			}):Play()
 		
-			ts:Create(listlayout, TweenInfo.new(0.5, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts, listlayout, TweenInfo.new(0.5, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
 				Padding = UDim.new(0, 7)
 			}):Play()
 			local AREAframes = {}
 			for _, i in ipairs(AREA:GetChildren()) do if i:IsA("Frame") then table.insert(AREAframes, i) end end
 			if #AREAframes > 5 then
 				for i=1, math.min(7, #AREAframes) do AREAframes[i]:GetChildren()[1].Position = UDim2.fromScale(-1, 0) end
-				ts:Create(AREA, TweenInfo.new(0.1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), { CanvasPosition = Vector2.zero }):Play()
+				AineRuntime.create(ts, AREA, TweenInfo.new(0.1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), { CanvasPosition = Vector2.zero }):Play()
 				for i=1, math.min(7, #AREAframes) do
 					task.wait(0.02)
 					task.spawn(function()
@@ -3101,7 +3251,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 			for i, module in ipairs(dense) do
 				local success, err = pcall(function()
 		
-					local listbutton = getgenv().YARHM.ListButton:Clone()
+					local listbutton = AineRuntime.clone(getgenv().YARHM.ListButton)
 					listbutton.Parent           = script.Parent.Menu.List.ScrollingFrame
 					listbutton.Name             = module.Name
 					listbutton.Text             = module.Name
@@ -3112,10 +3262,10 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 					themedColor.Name = "themedColor"
 					themedColor.Value = "primaryColor"
 		
-					listbutton.MouseButton1Click:Connect(function()
+					AineRuntime.connect(listbutton.MouseButton1Click, function()
 		
 						if selected.Value then
-							ts:Create(selected.Value, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+							AineRuntime.create(ts, selected.Value, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 								BackgroundColor3 = FUNCTIONSmodule.getTheme().primaryColor,
 								TextColor3       = FUNCTIONSmodule.getTheme().textColor,
 							}):Play()
@@ -3123,7 +3273,7 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 		
 						selected.Value = listbutton
 						AREAModuleSelected = module
-						ts:Create(selected.Value, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+						AineRuntime.create(ts, selected.Value, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 							BackgroundColor3 = Color3.fromRGB(255,255,255),
 							TextColor3       = Color3.fromRGB(0,0,0),
 						}):Play()
@@ -3131,20 +3281,20 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 						FUNCTIONSmodule.loader(module)
 					end)
 		
-					listbutton.MouseButton1Down:Connect(function()
-						ts:Create(listbutton, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					AineRuntime.connect(listbutton.MouseButton1Down, function()
+						AineRuntime.create(ts, listbutton, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 							Size = UDim2.new(1, -10, 0, 40)
 						}):Play()
 					end)
 		
-					listbutton.MouseButton1Up:Connect(function()
-						ts:Create(listbutton, TweenInfo.new(1.2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
+					AineRuntime.connect(listbutton.MouseButton1Up, function()
+						AineRuntime.create(ts, listbutton, TweenInfo.new(1.2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
 							Size = UDim2.new(1, 0, 0, 50),
 						}):Play()
 					end)
 		
-					listbutton.MouseLeave:Connect(function()
-						ts:Create(listbutton, TweenInfo.new(1.2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
+					AineRuntime.connect(listbutton.MouseLeave, function()
+						AineRuntime.create(ts, listbutton, TweenInfo.new(1.2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
 							Size = UDim2.new(1, 0, 0, 50),
 						}):Play()
 					end)
@@ -3169,33 +3319,33 @@ do -- Routine Module: StarterGui.YARHM.FUNCTIONS
 				if v:IsA("TextButton") and v.Name ~= "OptionPlaceholder" then v:Destroy() end
 			end
 			for _, button in buttons do
-				local newButton = dialog.Options.OptionPlaceholder:Clone()
+				local newButton = AineRuntime.clone(dialog.Options.OptionPlaceholder)
 		
 				newButton.Visible = true
 				newButton.Name = button
 				newButton.Text = button
 				newButton.Parent = dialog.Options
-				newButton.MouseButton1Click:Connect(function()
+				AineRuntime.connect(newButton.MouseButton1Click, function()
 					newButton.Parent.Parent.OnSelect:Fire(newButton.Name)
 				end)
 			end
 		
-			ts:Create(dialog, TweenInfo.new(1.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out),{
+			AineRuntime.create(ts, dialog, TweenInfo.new(1.1, Enum.EasingStyle.Back, Enum.EasingDirection.Out),{
 				Size = UDim2.fromOffset(313, 147)
 			}):Play()
 		
-			ts:Create(dialog.UIScale, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out),{
+			AineRuntime.create(ts, dialog.UIScale, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out),{
 				Scale = 1
 			}):Play()
 		end
 		
 		function FUNCTIONSmodule.closedialog()
 			local dialog = script.Parent.Dialog
-			ts:Create(dialog, TweenInfo.new(1.1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),{
+			AineRuntime.create(ts, dialog, TweenInfo.new(1.1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),{
 				Size = UDim2.fromOffset(0, 147)
 			}):Play()
 		
-			ts:Create(dialog.UIScale, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out),{
+			AineRuntime.create(ts, dialog.UIScale, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out),{
 				Scale = 0
 			}):Play()
 		end
@@ -3218,7 +3368,7 @@ do -- Routine Module: StarterGui.YARHM.DraggableObject
     local function module_script()
     -- Â© Aetherion 2026
 
-		local function a(b,c)local d=c.AbsoluteSize;local e=c.AbsolutePosition;local f=b.X.Scale*d.X+b.X.Offset;local g=b.Y.Scale*d.Y+b.Y.Offset;local h=math.clamp(f,0,d.X)local i=math.clamp(g,0,d.Y)local j=UDim2.new(b.X.Scale,h-b.X.Scale*d.X,b.Y.Scale,i-b.Y.Scale*d.Y)return j end;local k=UDim2.new;local l=game:GetService("UserInputService")local m=game:GetService("TweenService")local n={}n.__index=n;function n.new(o,p,q,r)local self={}self.Object=o;self.ToMove=p;self.Smooth=q;self.CallbackOnly=r;self.DragStarted=nil;self.DragEnded=nil;self.Dragged=nil;self.Dragging=false;self.LastPosition=nil;self.Velocity=Vector2.new(0,0)setmetatable(self,n)return self end;function n:Enable()local s=self.Object;local t=self.ToMove;local u=nil;local v=nil;local w=nil;local x=false;local function y(z)local A=z.Position-v;local B=UDim2.new(w.X.Scale,w.X.Offset+A.X,w.Y.Scale,w.Y.Offset+A.Y)if self.CallbackOnly then else B=a(B,self.Object:FindFirstAncestorWhichIsA("ScreenGui"))if(self.Smooth==nil or self.Smooth==true)and self.Smooth~=false then m:Create(t and t or s,TweenInfo.new(0.5,Enum.EasingStyle.Cubic,Enum.EasingDirection.Out),{Position=B}):Play()else local C=t and t or s;C.Position=B end end;return B end;self.InputBegan=s.InputBegan:Connect(function(z)if z.UserInputType==Enum.UserInputType.MouseButton1 or z.UserInputType==Enum.UserInputType.Touch then x=true;local D;D=z.Changed:Connect(function()if z.UserInputState==Enum.UserInputState.End and(self.Dragging or x)then self.Dragging=false;D:Disconnect()if self.DragEnded and not x then self.DragEnded(self.Velocity)end;x=false end end)end end)self.InputChanged=s.InputChanged:Connect(function(z)if z.UserInputType==Enum.UserInputType.MouseMovement or z.UserInputType==Enum.UserInputType.Touch then u=z end end)self.InputChanged2=l.InputChanged:Connect(function(z)if s.Parent==nil then self:Disable()return end;if x then x=false;if self.DragStarted then self.DragStarted()end;self.Dragging=true;v=z.Position;if t then w=t.Position else w=s.Position end;self.LastPosition=z.Position end;if z==u and self.Dragging then local B=y(z)self.Velocity=z.Position-self.LastPosition;self.LastPosition=z.Position;if self.Dragged then self.Dragged(B)end end end)end;function n:Disable()self.InputBegan:Disconnect()self.InputChanged:Disconnect()self.InputChanged2:Disconnect()if self.Dragging then self.Dragging=false;if self.DragEnded then self.DragEnded(self.Velocity)end end end;return n
+		local function a(b,c)local d=c.AbsoluteSize;local e=c.AbsolutePosition;local f=b.X.Scale*d.X+b.X.Offset;local g=b.Y.Scale*d.Y+b.Y.Offset;local h=math.clamp(f,0,d.X)local i=math.clamp(g,0,d.Y)local j=UDim2.new(b.X.Scale,h-b.X.Scale*d.X,b.Y.Scale,i-b.Y.Scale*d.Y)return j end;local k=UDim2.new;local l=game:GetService("UserInputService")local m=game:GetService("TweenService")local n={}n.__index=n;function n.new(o,p,q,r)local self={}self.Object=o;self.ToMove=p;self.Smooth=q;self.CallbackOnly=r;self.DragStarted=nil;self.DragEnded=nil;self.Dragged=nil;self.Dragging=false;self.LastPosition=nil;self.Velocity=Vector2.new(0,0)setmetatable(self,n)return self end;function n:Enable()local s=self.Object;local t=self.ToMove;local u=nil;local v=nil;local w=nil;local x=false;local function y(z)local A=z.Position-v;local B=UDim2.new(w.X.Scale,w.X.Offset+A.X,w.Y.Scale,w.Y.Offset+A.Y)if self.CallbackOnly then else B=a(B,self.Object:FindFirstAncestorWhichIsA("ScreenGui"))if(self.Smooth==nil or self.Smooth==true)and self.Smooth~=false then AineRuntime.create(m, t and t or s,TweenInfo.new(0.5,Enum.EasingStyle.Cubic,Enum.EasingDirection.Out),{Position=B}):Play()else local C=t and t or s;C.Position=B end end;return B end;self.InputBegan=AineRuntime.connect(s.InputBegan, function(z)if z.UserInputType==Enum.UserInputType.MouseButton1 or z.UserInputType==Enum.UserInputType.Touch then x=true;local D;D=AineRuntime.connect(z.Changed, function()if z.UserInputState==Enum.UserInputState.End and(self.Dragging or x)then self.Dragging=false;D:Disconnect()if self.DragEnded and not x then self.DragEnded(self.Velocity)end;x=false end end)end end)self.InputChanged=AineRuntime.connect(s.InputChanged, function(z)if z.UserInputType==Enum.UserInputType.MouseMovement or z.UserInputType==Enum.UserInputType.Touch then u=z end end)self.InputChanged2=AineRuntime.connect(l.InputChanged, function(z)if s.Parent==nil then self:Disable()return end;if x then x=false;if self.DragStarted then self.DragStarted()end;self.Dragging=true;v=z.Position;if t then w=t.Position else w=s.Position end;self.LastPosition=z.Position end;if z==u and self.Dragging then local B=y(z)self.Velocity=z.Position-self.LastPosition;self.LastPosition=z.Position;if self.Dragged then self.Dragged(B)end end end)end;function n:Disable()self.InputBegan:Disconnect()self.InputChanged:Disconnect()self.InputChanged2:Disconnect()if self.Dragging then self.Dragging=false;if self.DragEnded then self.DragEnded(self.Velocity)end end end;return n
 		
     end
     routine_module_scripts[script] = module_script
@@ -3230,7 +3380,7 @@ do -- Routine Module: StarterGui.YARHM.ClickAndHold
     local function module_script()
     -- Â© Aetherion 2026
 
-		local a={}a.__index=a;local b=game:GetService("UserInputService")function a.new(c,d)local self=setmetatable({},a)self.textButton=c;self.holdTime=d or 0.5;self.holdTask=nil;self.initialPosition=nil;self.Holded=Instance.new("BindableEvent")local function e(f,g)return math.sqrt((g.X-f.X)^2+(g.Y-f.Y)^2)end;self.textButton.MouseButton1Down:Connect(function(h,i)self.initialPosition=Vector2.new(h,i)self.holdTask=task.spawn(function()task.wait(self.holdTime)if self.holdTask then self.Holded:Fire()end end)end)b.InputChanged:Connect(function(j)if j.UserInputType==Enum.UserInputType.MouseMovement or j.UserInputType==Enum.UserInputType.Touch then if self.holdTask and self.initialPosition then local k=j.Position;local l=e(self.initialPosition,k)if l>10 then coroutine.close(self.holdTask)self.holdTask=nil end end end end)b.InputEnded:Connect(function(j)if j.UserInputType==Enum.UserInputType.MouseButton1 or j.UserInputType==Enum.UserInputType.Touch then if self.holdTask then coroutine.close(self.holdTask)self.holdTask=nil end;self.initialPosition=nil end end)return self end;return a
+		local a={}a.__index=a;local b=game:GetService("UserInputService")function a.new(c,d)local self=setmetatable({},a)self.textButton=c;self.holdTime=d or 0.5;self.holdTask=nil;self.initialPosition=nil;self.Holded=Instance.new("BindableEvent")local function e(f,g)return math.sqrt((g.X-f.X)^2+(g.Y-f.Y)^2)end;AineRuntime.connect(self.textButton.MouseButton1Down, function(h,i)self.initialPosition=Vector2.new(h,i)self.holdTask=task.spawn(function()task.wait(self.holdTime)if self.holdTask then self.Holded:Fire()end end)end)AineRuntime.connect(b.InputChanged, function(j)if j.UserInputType==Enum.UserInputType.MouseMovement or j.UserInputType==Enum.UserInputType.Touch then if self.holdTask and self.initialPosition then local k=j.Position;local l=e(self.initialPosition,k)if l>10 then coroutine.close(self.holdTask)self.holdTask=nil end end end end)AineRuntime.connect(b.InputEnded, function(j)if j.UserInputType==Enum.UserInputType.MouseButton1 or j.UserInputType==Enum.UserInputType.Touch then if self.holdTask then coroutine.close(self.holdTask)self.holdTask=nil end;self.initialPosition=nil end end)return self end;return a
     end
     routine_module_scripts[script] = module_script
 end
@@ -3255,7 +3405,7 @@ do -- Routine Module: StarterGui.YARHM.ESPIndicator
 		-- Robust ESP module with distancing, arrows, and grouping
 		-- Designed and written by YARHM
 		
-		local e={} e.__index=e local a=game:GetService("RunService") local _=game:GetService("Players") local b=game:GetService("HttpService") local l=game:GetService("TweenService") e.Groups={} e.TargetIndex={} e.Defaults={AccentColor=Color3.new(1,1,0),HighlightFillTransparency=0.7,HighlightOutlineTransparency=0,HighlightDepthMode=Enum.HighlightDepthMode.AlwaysOnTop,ArrowShow=false,ArrowEdgePadding=50,ArrowMinDistance=0,ArrowSize=UDim2.new(0,30,0,30),ArrowImage="rbxassetid://97136202386756",ArrowShowDistanceText=true,ArrowDistanceFont=Enum.Font.Montserrat,ArrowDistanceTextSize=18,ShowLabel=false,LabelText="Target",LabelMaxDistance=99999,LabelOffset=Vector3.new(0,2,0),Parent=game:GetService("CoreGui")} function e.new(b)local c=setmetatable({},e) c.Settings={} for a,_ in pairs(e.Defaults)do c.Settings[a]=(b and b[a]~=nil)and b[a]or _ end local _=c.Settings.Parent or _.LocalPlayer:WaitForChild("PlayerGui") c.ScreenGui=Instance.new("ScreenGui") c.ScreenGui.Name="ESPIndicators" c.ScreenGui.IgnoreGuiInset=true c.ScreenGui.ResetOnSpawn=false c.ScreenGui.Parent=_ c.ArrowTemplate=Instance.new("ImageLabel") c.ArrowTemplate.Name="ArrowTemplate" c.ArrowTemplate.Size=c.Settings.ArrowSize c.ArrowTemplate.AnchorPoint=Vector2.new(0.5,0.5) c.ArrowTemplate.BackgroundTransparency=1 c.ArrowTemplate.Image=c.Settings.ArrowImage c.ArrowTemplate.ImageColor3=c.Settings.AccentColor c.ArrowTemplate.Visible=false c.ArrowTemplate.Parent=c.ScreenGui c.Scaler=Instance.new("UIScale") c.Scaler.Name="Scaler" c.Scaler.Scale=0 c.Scaler.Parent=c.ArrowTemplate c.Indicators={} c._updateConn=a.RenderStepped:Connect(function()c:_update()end) c._cleanupConn=a.Heartbeat:Connect(function()c:_cleanupOrphanedArrows() c:_cleanupOrphanedHighlights() c:_cleanupOrphanedLabels()end) return c end function e:AddGroup(_)local a=e.Groups[_] if not a then a={enabled=true,properties={},targets={}} e.Groups[_]=a end return a end function e:GetGroup(_)return e.Groups[_]end function e:RemoveGroup(b)local _=e.Groups[b] if not _ then return false end for _,_ in ipairs(_.targets)do local c=e.TargetIndex[_] if c then for _,a in ipairs(c)do if a==b then table.remove(c,_) break end end if#c==0 then e.TargetIndex[_]=nil end end if not e.TargetIndex[_]then self:Remove(_)end end e.Groups[b]=nil return true end function e:ClearAllGroups()for a,_ in pairs(e.Groups)do self:RemoveGroup(a)end end function e:ToggleGroup(_,a)local b=e.Groups[_] if not b then return end b.enabled=(a~=nil)and a or not b.enabled for _,_ in ipairs(b.targets)do local _=self.Indicators[_] if _ then if _.Highlight then _.Highlight.Enabled=b.enabled end if _.Arrow then _.Arrow.Visible=b.enabled and self.Settings.ArrowShow end if _.Label then _.Label.Enabled=b.enabled end end end return b.enabled end function e:SetGroupProperty(_,a,b)local _=self:AddGroup(_) _.properties[a]=b for _,_ in ipairs(_.targets)do local _=self.Indicators[_] if _ then if a=="AccentColor"then if _.Highlight then _.Highlight.FillColor=b _.Highlight.OutlineColor=b end if _.Arrow then _.Arrow.ImageColor3=b end if _.DistanceLabel then _.DistanceLabel.TextColor3=b end if _.Label and _.Label:FindFirstChild("TextLabel")then _.Label.TextLabel.TextColor3=b end end end end end function e:Add(a,g)assert(a,"ESPIndicator:Add requires a non-nil target") g=g or{} local d=Instance.new("Highlight") d.Name="Highlight_"..b:GenerateGUID(false) d.Adornee=a d.FillTransparency=g.HighlightFillTransparency or self.Settings.HighlightFillTransparency d.FillColor=g.AccentColor or self.Settings.AccentColor d.OutlineColor=g.AccentColor or self.Settings.AccentColor d.OutlineTransparency=g.HighlightOutlineTransparency or self.Settings.HighlightOutlineTransparency d.DepthMode=g.HighlightDepthMode or self.Settings.HighlightDepthMode d.Parent=self.ScreenGui local c,_,e if(g.ArrowShow or self.Settings.ArrowShow)then c=self.ArrowTemplate:Clone() c.Name="Arrow_"..b:GenerateGUID(false) c.ImageColor3=g.AccentColor or self.Settings.AccentColor c.Visible=true c.Parent=self.ScreenGui _=c:FindFirstChild("Scaler") if(g.ArrowShowDistanceText or self.Settings.ArrowShowDistanceText)then e=Instance.new("TextLabel") e.Name="DistanceLabel" e.AnchorPoint=Vector2.new(0.5,0) e.BackgroundTransparency=1 e.Font=g.ArrowDistanceFont or self.Settings.ArrowDistanceFont e.TextSize=g.ArrowDistanceTextSize or self.Settings.ArrowDistanceTextSize e.TextColor3=g.AccentColor or self.Settings.AccentColor e.Parent=c end end local f if(g.ShowLabel or self.Settings.ShowLabel)then f=Instance.new("BillboardGui") f.Name="Label_"..b:GenerateGUID(false) f.AlwaysOnTop=true f.MaxDistance=self.Settings.LabelMaxDistance f.Size=UDim2.new(0,70,0,70) f.StudsOffset=self.Settings.LabelOffset f.Adornee=a f.Parent=self.ScreenGui local _=Instance.new("TextLabel") _.Name="TextLabel" _.Size=UDim2.new(1,0,1,0) _.AnchorPoint=Vector2.new(0.5,0.5) _.Position=UDim2.new(0.5,0,0.5,0) _.BackgroundTransparency=1 _.Font=Enum.Font.SourceSansBold _.TextScaled=true _.TextWrapped=true _.TextSize=14 _.TextColor3=g.AccentColor or self.Settings.AccentColor _.Text=g.LabelText or self.Settings.LabelText _.Parent=f Instance.new("UIStroke",_)end self.Indicators[a]={Highlight=d,Arrow=c,Scaler=_,DistanceLabel=e,Label=f,Options=g} local _=g.GroupName or self.Settings.GroupName if _ then self:AddToGroup(a,_)end end function e:Remove(c)local _=self.Indicators[c] if not _ then return end if _.Highlight then _.Highlight.Adornee=nil _.Highlight:Destroy()end if _.Arrow then _.Arrow:Destroy()end if _.Label then _.Label:Destroy()end local _=e.TargetIndex[c] if _ then for _,_ in ipairs(_)do local b=e.Groups[_] if b then for a,_ in ipairs(b.targets)do if _==c then table.remove(b.targets,a) break end end end end e.TargetIndex[c]=nil end self.Indicators[c]=nil end function e:AddToGroup(c,b)local _=self:AddGroup(b) if not table.find(_.targets,c)then table.insert(_.targets,c)end local a=e.TargetIndex[c] if not a then a={} e.TargetIndex[c]=a end if not table.find(a,b)then table.insert(a,b)end for a,_ in pairs(_.properties)do self:SetGroupProperty(b,a,_)end if not _.enabled then local _=self.Indicators[c] if _ and _.Highlight then _.Highlight.Enabled=false end end return true end function e:RemoveFromGroup(d,b)local c=e.Groups[b] if not c then return false end if table.find(c.targets,d)then for _,a in ipairs(c.targets)do if a==d then table.remove(c.targets,_) break end end else return false end local c=e.TargetIndex[d] if c then for a,_ in ipairs(c)do if _==b then table.remove(c,a) break end end if#c==0 then e.TargetIndex[d]=nil end end return true end function e:GetGroupTargets(_)local _=e.Groups[_] return _ and _.targets or{}end function e:GetTargetGroups(_)return e.TargetIndex[_]or{}end function e:_cleanupOrphanedHighlights()for _,_ in ipairs(self.ScreenGui:GetChildren())do if _:IsA("Highlight")and not table.find(self:_allHighlights(),_)then _.Adornee=nil _:Destroy()end end end function e:_allHighlights()local a={} for _,_ in pairs(self.Indicators)do if _.Highlight then table.insert(a,_.Highlight)end end return a end function e:_cleanupOrphanedArrows()for _,_ in ipairs(self.ScreenGui:GetChildren())do if _:IsA("ImageLabel")and _.Name:match("^Arrow_")then if not table.find(self:_allArrows(),_)then _:Destroy()end end end end function e:_allArrows()local a={} for _,_ in pairs(self.Indicators)do if _.Arrow then table.insert(a,_.Arrow)end end return a end function e:_cleanupOrphanedLabels()for _,_ in ipairs(self.ScreenGui:GetChildren())do if _:IsA("BillboardGui")and _.Name:match("^Label_")then if not table.find(self:_allLabels(),_)then _.Adornee=nil _:Destroy()end end end end function e:_allLabels()local a={} for _,_ in pairs(self.Indicators)do if _.Label then table.insert(a,_.Label)end end return a end function e:_update()local a=workspace.CurrentCamera local _=a.ViewportSize local f,i=_.X,_.Y for _,p in pairs(self.Indicators)do local j=p.Options local h=p.Arrow local k=p.Scaler if((not h)or(not k))and self.Settings.ArrowShow then self:Remove(_) continue end if not h then continue end local n if _:IsA("Model")then n=(_.PrimaryPart and _.PrimaryPart.Position)or _:GetModelCFrame().p elseif _:IsA("BasePart")then n=_.Position else continue end local m,e=a:WorldToViewportPoint(n) local c=(a.CFrame.p-n).Magnitude local _=j.ArrowMinDistance or self.Settings.ArrowMinDistance local o=j.ArrowEdgePadding or self.Settings.ArrowEdgePadding if e and c>_ then l:Create(k,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Scale=0}):Play()else l:Create(k,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Scale=1}):Play() local d,g=f-o*2,i-o*2 local b=a.CFrame local _=math.sqrt((d/2)^2+(g/2)^2) local a=n-b.Position local a=b:VectorToObjectSpace(a) local n=Vector2.new(a.X,a.Y).Unit local a=math.clamp(m.X,o,f-o) local b=math.clamp(m.Y,o,i-o) if a==m.X and b==m.Y and e then l:Create(k,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Scale=0}):Play()else local _=n*_ local b if math.abs(_.Y)>g/2 then b=n*math.abs((g/2)/n.Y)else b=n*math.abs((d/2)/n.X)end local a=f/2+b.X local _=i/2-b.Y local b=math.atan2(n.X,n.Y) l:Create(h,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Position=UDim2.fromOffset(a,_),Rotation=math.deg(b)}):Play()end if p.DistanceLabel then p.DistanceLabel.Text=string.format("%dm",math.round(c)) local _=(j.ArrowSize and j.ArrowSize.Y.Offset or self.Settings.ArrowSize.Y.Offset)+16 p.DistanceLabel.Position=UDim2.new(0.5,0,0,_)end end end end function e:Destroy()if self._updateConn then self._updateConn:Disconnect()end if self._cleanupConn then self._cleanupConn:Disconnect()end self:ClearAllGroups() for _,_ in pairs(self.Indicators)do if _.Highlight then _.Highlight:Destroy()end if _.Arrow then _.Arrow:Destroy()end if _.Label then _.Label:Destroy()end end self.ScreenGui:Destroy() self.Indicators={} e.Groups={} e.TargetIndex={}end return e
+		local e={} e.__index=e local a=game:GetService("RunService") local _=game:GetService("Players") local b=game:GetService("HttpService") local l=game:GetService("TweenService") e.Groups={} e.TargetIndex={} e.Defaults={AccentColor=Color3.new(1,1,0),HighlightFillTransparency=0.7,HighlightOutlineTransparency=0,HighlightDepthMode=Enum.HighlightDepthMode.AlwaysOnTop,ArrowShow=false,ArrowEdgePadding=50,ArrowMinDistance=0,ArrowSize=UDim2.new(0,30,0,30),ArrowImage="rbxassetid://97136202386756",ArrowShowDistanceText=true,ArrowDistanceFont=Enum.Font.Montserrat,ArrowDistanceTextSize=18,ShowLabel=false,LabelText="Target",LabelMaxDistance=99999,LabelOffset=Vector3.new(0,2,0),Parent=game:GetService("CoreGui")} function e.new(b)local c=setmetatable({},e) c.Settings={} for a,_ in pairs(e.Defaults)do c.Settings[a]=(b and b[a]~=nil)and b[a]or _ end local _=c.Settings.Parent or _.LocalPlayer:WaitForChild("PlayerGui") c.ScreenGui=Instance.new("ScreenGui") c.ScreenGui.Name="ESPIndicators" c.ScreenGui.IgnoreGuiInset=true c.ScreenGui.ResetOnSpawn=false c.ScreenGui.Parent=_ c.ArrowTemplate=Instance.new("ImageLabel") c.ArrowTemplate.Name="ArrowTemplate" c.ArrowTemplate.Size=c.Settings.ArrowSize c.ArrowTemplate.AnchorPoint=Vector2.new(0.5,0.5) c.ArrowTemplate.BackgroundTransparency=1 c.ArrowTemplate.Image=c.Settings.ArrowImage c.ArrowTemplate.ImageColor3=c.Settings.AccentColor c.ArrowTemplate.Visible=false c.ArrowTemplate.Parent=c.ScreenGui c.Scaler=Instance.new("UIScale") c.Scaler.Name="Scaler" c.Scaler.Scale=0 c.Scaler.Parent=c.ArrowTemplate c.Indicators={} c._updateConn=AineRuntime.connect(a.RenderStepped, function()c:_update()end) c._cleanupConn=AineRuntime.connect(a.Heartbeat, function()c:_cleanupOrphanedArrows() c:_cleanupOrphanedHighlights() c:_cleanupOrphanedLabels()end) return c end function e:AddGroup(_)local a=e.Groups[_] if not a then a={enabled=true,properties={},targets={}} e.Groups[_]=a end return a end function e:GetGroup(_)return e.Groups[_]end function e:RemoveGroup(b)local _=e.Groups[b] if not _ then return false end for _,_ in ipairs(_.targets)do local c=e.TargetIndex[_] if c then for _,a in ipairs(c)do if a==b then table.remove(c,_) break end end if#c==0 then e.TargetIndex[_]=nil end end if not e.TargetIndex[_]then self:Remove(_)end end e.Groups[b]=nil return true end function e:ClearAllGroups()for a,_ in pairs(e.Groups)do self:RemoveGroup(a)end end function e:ToggleGroup(_,a)local b=e.Groups[_] if not b then return end b.enabled=(a~=nil)and a or not b.enabled for _,_ in ipairs(b.targets)do local _=self.Indicators[_] if _ then if _.Highlight then _.Highlight.Enabled=b.enabled end if _.Arrow then _.Arrow.Visible=b.enabled and self.Settings.ArrowShow end if _.Label then _.Label.Enabled=b.enabled end end end return b.enabled end function e:SetGroupProperty(_,a,b)local _=self:AddGroup(_) _.properties[a]=b for _,_ in ipairs(_.targets)do local _=self.Indicators[_] if _ then if a=="AccentColor"then if _.Highlight then _.Highlight.FillColor=b _.Highlight.OutlineColor=b end if _.Arrow then _.Arrow.ImageColor3=b end if _.DistanceLabel then _.DistanceLabel.TextColor3=b end if _.Label and _.Label:FindFirstChild("TextLabel")then _.Label.TextLabel.TextColor3=b end end end end end function e:Add(a,g)assert(a,"ESPIndicator:Add requires a non-nil target") g=g or{} local d=Instance.new("Highlight") d.Name="Highlight_"..b:GenerateGUID(false) d.Adornee=a d.FillTransparency=g.HighlightFillTransparency or self.Settings.HighlightFillTransparency d.FillColor=g.AccentColor or self.Settings.AccentColor d.OutlineColor=g.AccentColor or self.Settings.AccentColor d.OutlineTransparency=g.HighlightOutlineTransparency or self.Settings.HighlightOutlineTransparency d.DepthMode=g.HighlightDepthMode or self.Settings.HighlightDepthMode d.Parent=self.ScreenGui local c,_,e if(g.ArrowShow or self.Settings.ArrowShow)then c=AineRuntime.clone(self.ArrowTemplate) c.Name="Arrow_"..b:GenerateGUID(false) c.ImageColor3=g.AccentColor or self.Settings.AccentColor c.Visible=true c.Parent=self.ScreenGui _=c:FindFirstChild("Scaler") if(g.ArrowShowDistanceText or self.Settings.ArrowShowDistanceText)then e=Instance.new("TextLabel") e.Name="DistanceLabel" e.AnchorPoint=Vector2.new(0.5,0) e.BackgroundTransparency=1 e.Font=g.ArrowDistanceFont or self.Settings.ArrowDistanceFont e.TextSize=g.ArrowDistanceTextSize or self.Settings.ArrowDistanceTextSize e.TextColor3=g.AccentColor or self.Settings.AccentColor e.Parent=c end end local f if(g.ShowLabel or self.Settings.ShowLabel)then f=Instance.new("BillboardGui") f.Name="Label_"..b:GenerateGUID(false) f.AlwaysOnTop=true f.MaxDistance=self.Settings.LabelMaxDistance f.Size=UDim2.new(0,70,0,70) f.StudsOffset=self.Settings.LabelOffset f.Adornee=a f.Parent=self.ScreenGui local _=Instance.new("TextLabel") _.Name="TextLabel" _.Size=UDim2.new(1,0,1,0) _.AnchorPoint=Vector2.new(0.5,0.5) _.Position=UDim2.new(0.5,0,0.5,0) _.BackgroundTransparency=1 _.Font=Enum.Font.SourceSansBold _.TextScaled=true _.TextWrapped=true _.TextSize=14 _.TextColor3=g.AccentColor or self.Settings.AccentColor _.Text=g.LabelText or self.Settings.LabelText _.Parent=f Instance.new("UIStroke",_)end self.Indicators[a]={Highlight=d,Arrow=c,Scaler=_,DistanceLabel=e,Label=f,Options=g} local _=g.GroupName or self.Settings.GroupName if _ then self:AddToGroup(a,_)end end function e:Remove(c)local _=self.Indicators[c] if not _ then return end if _.Highlight then _.Highlight.Adornee=nil _.Highlight:Destroy()end if _.Arrow then _.Arrow:Destroy()end if _.Label then _.Label:Destroy()end local _=e.TargetIndex[c] if _ then for _,_ in ipairs(_)do local b=e.Groups[_] if b then for a,_ in ipairs(b.targets)do if _==c then table.remove(b.targets,a) break end end end end e.TargetIndex[c]=nil end self.Indicators[c]=nil end function e:AddToGroup(c,b)local _=self:AddGroup(b) if not table.find(_.targets,c)then table.insert(_.targets,c)end local a=e.TargetIndex[c] if not a then a={} e.TargetIndex[c]=a end if not table.find(a,b)then table.insert(a,b)end for a,_ in pairs(_.properties)do self:SetGroupProperty(b,a,_)end if not _.enabled then local _=self.Indicators[c] if _ and _.Highlight then _.Highlight.Enabled=false end end return true end function e:RemoveFromGroup(d,b)local c=e.Groups[b] if not c then return false end if table.find(c.targets,d)then for _,a in ipairs(c.targets)do if a==d then table.remove(c.targets,_) break end end else return false end local c=e.TargetIndex[d] if c then for a,_ in ipairs(c)do if _==b then table.remove(c,a) break end end if#c==0 then e.TargetIndex[d]=nil end end return true end function e:GetGroupTargets(_)local _=e.Groups[_] return _ and _.targets or{}end function e:GetTargetGroups(_)return e.TargetIndex[_]or{}end function e:_cleanupOrphanedHighlights()for _,_ in ipairs(self.ScreenGui:GetChildren())do if _:IsA("Highlight")and not table.find(self:_allHighlights(),_)then _.Adornee=nil _:Destroy()end end end function e:_allHighlights()local a={} for _,_ in pairs(self.Indicators)do if _.Highlight then table.insert(a,_.Highlight)end end return a end function e:_cleanupOrphanedArrows()for _,_ in ipairs(self.ScreenGui:GetChildren())do if _:IsA("ImageLabel")and _.Name:match("^Arrow_")then if not table.find(self:_allArrows(),_)then _:Destroy()end end end end function e:_allArrows()local a={} for _,_ in pairs(self.Indicators)do if _.Arrow then table.insert(a,_.Arrow)end end return a end function e:_cleanupOrphanedLabels()for _,_ in ipairs(self.ScreenGui:GetChildren())do if _:IsA("BillboardGui")and _.Name:match("^Label_")then if not table.find(self:_allLabels(),_)then _.Adornee=nil _:Destroy()end end end end function e:_allLabels()local a={} for _,_ in pairs(self.Indicators)do if _.Label then table.insert(a,_.Label)end end return a end function e:_update()local a=workspace.CurrentCamera local _=a.ViewportSize local f,i=_.X,_.Y for _,p in pairs(self.Indicators)do local j=p.Options local h=p.Arrow local k=p.Scaler if((not h)or(not k))and self.Settings.ArrowShow then self:Remove(_) continue end if not h then continue end local n if _:IsA("Model")then n=(_.PrimaryPart and _.PrimaryPart.Position)or _:GetModelCFrame().p elseif _:IsA("BasePart")then n=_.Position else continue end local m,e=a:WorldToViewportPoint(n) local c=(a.CFrame.p-n).Magnitude local _=j.ArrowMinDistance or self.Settings.ArrowMinDistance local o=j.ArrowEdgePadding or self.Settings.ArrowEdgePadding if e and c>_ then AineRuntime.create(l, k,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Scale=0}):Play()else AineRuntime.create(l, k,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Scale=1}):Play() local d,g=f-o*2,i-o*2 local b=a.CFrame local _=math.sqrt((d/2)^2+(g/2)^2) local a=n-b.Position local a=b:VectorToObjectSpace(a) local n=Vector2.new(a.X,a.Y).Unit local a=math.clamp(m.X,o,f-o) local b=math.clamp(m.Y,o,i-o) if a==m.X and b==m.Y and e then AineRuntime.create(l, k,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Scale=0}):Play()else local _=n*_ local b if math.abs(_.Y)>g/2 then b=n*math.abs((g/2)/n.Y)else b=n*math.abs((d/2)/n.X)end local a=f/2+b.X local _=i/2-b.Y local b=math.atan2(n.X,n.Y) AineRuntime.create(l, h,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Position=UDim2.fromOffset(a,_),Rotation=math.deg(b)}):Play()end if p.DistanceLabel then p.DistanceLabel.Text=string.format("%dm",math.round(c)) local _=(j.ArrowSize and j.ArrowSize.Y.Offset or self.Settings.ArrowSize.Y.Offset)+16 p.DistanceLabel.Position=UDim2.new(0.5,0,0,_)end end end end function e:Destroy()if self._updateConn then self._updateConn:Disconnect()end if self._cleanupConn then self._cleanupConn:Disconnect()end self:ClearAllGroups() for _,_ in pairs(self.Indicators)do if _.Highlight then _.Highlight:Destroy()end if _.Arrow then _.Arrow:Destroy()end if _.Label then _.Label:Destroy()end end self.ScreenGui:Destroy() self.Indicators={} e.Groups={} e.TargetIndex={}end return e
     end
     routine_module_scripts[script] = module_script
 end
@@ -3461,7 +3611,7 @@ do -- Routine Module: StarterGui.YARHM.FlyUtility
 		-- Mobile-compatible fly module
 		-- Designed and written by YARHM
 		
-		local l={} local _=game:GetService("Players") local b=game:GetService("RunService") local d=_.LocalPlayer local h=false local e=50 local c=2 local i=0 local g=Vector3.new() local j=nil local k=nil local f=nil local function _()if f then f:Disconnect() f=nil end if j then j:Destroy() j=nil end if k then k:Destroy() k=nil end local _=d.Character if _ then local _=_:FindFirstChildOfClass("Humanoid") if _ then _.PlatformStand=false end end h=false i=0 end local function a(_)local a=d.Character if not h or not a then l:Stop() return end local _=a:FindFirstChildOfClass("Humanoid") local d=a:FindFirstChild("HumanoidRootPart") local a=workspace.CurrentCamera if not _ or _.Health<=0 or not d or not a then l:Stop() return end local _=_.MoveDirection if _.Magnitude>0.01 then i=math.min(e,i+c) g=_.Unit else i=math.max(0,i-c)end local _=Vector3.new(g.X,0,g.Z) local c=Vector3.zero if _.Magnitude>0 then c=_.Unit*i end local f=a.CFrame.LookVector.Unit local b=g:Dot(f) local _=b<0 and-1 or 1 local a=Vector3.new(f.X,0,f.Z) if a.Magnitude>0 then a=a.Unit end local a=math.abs(g:Dot(a)) local _=f.Y*_*a local _=_*i k.Velocity=Vector3.new(c.X,_,c.Z) local _=(i/e)*30 local _=-math.rad(b*_) j.CFrame=CFrame.new(d.Position,d.Position+f)*CFrame.Angles(_,0,0)end function l:Start()if h then return end local c=d.Character if not c then return end local _=c:FindFirstChildOfClass("Humanoid") local c=c:FindFirstChild("HumanoidRootPart") if not _ or not c then return end h=true j=Instance.new("BodyGyro") j.P=100000 j.MaxTorque=Vector3.new(math.huge,math.huge,math.huge) j.CFrame=c.CFrame j.Parent=c k=Instance.new("BodyVelocity") k.P=10000 k.MaxForce=Vector3.new(math.huge,math.huge,math.huge) k.Velocity=Vector3.new(0,0,0) k.Parent=c _.PlatformStand=true f=b.Heartbeat:Connect(a)end function l:Stop()if not h then return end _()end function l:SetMaxSpeed(_)if type(_)=="number"and _>=0 then e=_ else warn("FlyModule:SetMaxSpeed requires a non-negative number.")end end function l:GetMaxSpeed()return e end function l:IsFlying()return h end d.CharacterRemoving:Connect(function(_)if h then l:Stop()end end) return l
+		local l={} local _=game:GetService("Players") local b=game:GetService("RunService") local d=_.LocalPlayer local h=false local e=50 local c=2 local i=0 local g=Vector3.new() local j=nil local k=nil local f=nil local function _()if f then f:Disconnect() f=nil end if j then j:Destroy() j=nil end if k then k:Destroy() k=nil end local _=d.Character if _ then local _=_:FindFirstChildOfClass("Humanoid") if _ then _.PlatformStand=false end end h=false i=0 end local function a(_)local a=d.Character if not h or not a then l:Stop() return end local _=a:FindFirstChildOfClass("Humanoid") local d=a:FindFirstChild("HumanoidRootPart") local a=workspace.CurrentCamera if not _ or _.Health<=0 or not d or not a then l:Stop() return end local _=_.MoveDirection if _.Magnitude>0.01 then i=math.min(e,i+c) g=_.Unit else i=math.max(0,i-c)end local _=Vector3.new(g.X,0,g.Z) local c=Vector3.zero if _.Magnitude>0 then c=_.Unit*i end local f=a.CFrame.LookVector.Unit local b=g:Dot(f) local _=b<0 and-1 or 1 local a=Vector3.new(f.X,0,f.Z) if a.Magnitude>0 then a=a.Unit end local a=math.abs(g:Dot(a)) local _=f.Y*_*a local _=_*i k.Velocity=Vector3.new(c.X,_,c.Z) local _=(i/e)*30 local _=-math.rad(b*_) j.CFrame=CFrame.new(d.Position,d.Position+f)*CFrame.Angles(_,0,0)end function l:Start()if h then return end local c=d.Character if not c then return end local _=c:FindFirstChildOfClass("Humanoid") local c=c:FindFirstChild("HumanoidRootPart") if not _ or not c then return end h=true j=Instance.new("BodyGyro") j.P=100000 j.MaxTorque=Vector3.new(math.huge,math.huge,math.huge) j.CFrame=c.CFrame j.Parent=c k=Instance.new("BodyVelocity") k.P=10000 k.MaxForce=Vector3.new(math.huge,math.huge,math.huge) k.Velocity=Vector3.new(0,0,0) k.Parent=c _.PlatformStand=true f=AineRuntime.connect(b.Heartbeat, a)end function l:Stop()if not h then return end _()end function l:SetMaxSpeed(_)if type(_)=="number"and _>=0 then e=_ else warn("FlyModule:SetMaxSpeed requires a non-negative number.")end end function l:GetMaxSpeed()return e end function l:IsFlying()return h end AineRuntime.connect(d.CharacterRemoving, function(_)if h then l:Stop()end end) return l
     end
     routine_module_scripts[script] = module_script
 end
@@ -3499,6 +3649,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 	local theme = require(script.Parent.Theme)
 	local espind = require(script.Parent.ESPIndicator)
 	local flyutility = require(script.Parent.FlyUtility)
+	AineRuntime.onClose(function() flyutility:Stop() end)
 	local PointSave = require(script.Parent.PointSave)
 	
 	
@@ -3601,7 +3752,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 	
 	
 	task.spawn(function()
-		rs.RenderStepped:Connect(function()
+		AineRuntime.connect(rs.RenderStepped, function()
 			if loopfovandws then
 				workspace.CurrentCamera.FieldOfView = fov
 				if game.Players.LocalPlayer.Character then
@@ -3613,12 +3764,12 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 		end)
 	end)
 	
-	uis.InputBegan:Connect(function(inp, proc)
+	AineRuntime.connect(uis.InputBegan, function(inp, proc)
 		if proc then return end
 	
 		if uis:IsKeyDown(Enum.KeyCode.LeftControl) and inp.KeyCode == Enum.KeyCode.Y and hidden then
 			hidden = false
-			ts:Create(script.Parent.Menu.UIScale, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts, script.Parent.Menu.UIScale, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 				Scale = 1
 			}):Play()
 		end
@@ -3652,7 +3803,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 		end
 	end
 	
-	uis.InputBegan:Connect(function(inp, proc)
+	AineRuntime.connect(uis.InputBegan, function(inp, proc)
 		if proc then return end
 	
 		if uis:IsKeyDown(Enum.KeyCode.LeftControl) and inp.UserInputType == Enum.UserInputType.MouseButton1 and ctrlclicktp then
@@ -3663,10 +3814,10 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 	end)
 	
 	if uis.AccelerometerEnabled then
-		uis.DeviceAccelerationChanged:Connect(function(acc)
+		AineRuntime.connect(uis.DeviceAccelerationChanged, function(acc)
 			if hidden and acc.Position.Magnitude > 28 then
 				hidden = false
-				ts:Create(script.Parent.Menu.UIScale, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, script.Parent.Menu.UIScale, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					Scale = 1
 				}):Play()
 			end 
@@ -3754,7 +3905,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 	local function setupHumanoid(humanoid)
 		if landedConnection then landedConnection:Disconnect() end
 	
-		landedConnection = humanoid.StateChanged:Connect(function(_, n)
+		landedConnection = AineRuntime.connect(humanoid.StateChanged, function(_, n)
 			if n == Enum.HumanoidStateType.Landed or n == Enum.HumanoidStateType.Running then
 	
 				landed = true
@@ -3784,7 +3935,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 					setupHumanoid(char:FindFirstChildWhichIsA("Humanoid"))
 				end
 	
-				infJumpConnection = uis.JumpRequest:Connect(function()
+				infJumpConnection = AineRuntime.connect(uis.JumpRequest, function()
 					local character = game.Players.LocalPlayer.Character
 					local humanoid = character and character:FindFirstChildWhichIsA("Humanoid")
 	
@@ -3882,7 +4033,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 		Type = "Toggle",
 		Args = {"Loop hitbox expansion", function(Self, state)
 			if state then
-				loopHitBoxExp = rs.Heartbeat:Connect(function()
+				loopHitBoxExp = AineRuntime.connect(rs.Heartbeat, function()
 					local players = game:GetService("Players"):GetPlayers()
 					for i,v in ipairs(players) do
 						if v ~= game.Players.LocalPlayer and v.Character:FindFirstChild('HumanoidRootPart') then
@@ -3999,7 +4150,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 		Type = "Input",
 		Args = {"FOV change", "Set FOV", function(Self, tofov)
 			if not tonumber(tofov) then fu.notification("Not a number. Setting to default.") end
-			ts:Create(workspace.CurrentCamera, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts, workspace.CurrentCamera, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 				FieldOfView = tonumber(tofov) or 70
 			}):Play()
 			fov = tonumber(tofov) or 70
@@ -4134,7 +4285,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 			if aimlock then return end
 			if aimlockrscon then aimlockrscon:Disconnect() end
 			if not target then fu.notification("Set a target first.") return end
-			aimlockrscon = rs.RenderStepped:Connect(function()
+			aimlockrscon = AineRuntime.connect(rs.RenderStepped, function()
 				if not target then fu.notification("No valid target.") aimlockrscon:Disconnect() return end
 				if not target.Character then return end
 				if not target.Character:FindFirstChild("HumanoidRootPart") then return end
@@ -4407,7 +4558,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 			antiFling = state
 			if state then
 				fu.notification("Anti-fling activated.")
-				flingDetectionCon = rs.Heartbeat:Connect(function()
+				flingDetectionCon = AineRuntime.connect(rs.Heartbeat, function()
 					for _, pl in ipairs(game:GetService("Players"):GetPlayers()) do
 						if pl.Character:IsDescendantOf(workspace) then
 							if pl.Character.PrimaryPart.AssemblyAngularVelocity.Magnitude > 50 or pl.Character.PrimaryPart.AssemblyLinearVelocity.Magnitude > 100 then
@@ -4429,7 +4580,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 					end
 				end)
 	
-				flingNeutralizerCon = rs.Heartbeat:Connect(function()
+				flingNeutralizerCon = AineRuntime.connect(rs.Heartbeat, function()
 					if game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character.PrimaryPart then
 						if game.Players.LocalPlayer.Character.PrimaryPart.AssemblyLinearVelocity.Magnitude > 250 or  game.Players.LocalPlayer.Character.PrimaryPart.AssemblyAngularVelocity.Magnitude > 250 then
 							fu.notification("You were flung. Neutralizing velocity!")
@@ -4471,7 +4622,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 					end
 				end
 			else
-				pl.Idled:Connect(function()
+				AineRuntime.connect(pl.Idled, function()
 					game:GetService("VirtualUser"):CaptureController()
 					game:GetService("VirtualUser"):ClickButton2(Vector2.new())
 				end)
@@ -4513,13 +4664,13 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 		Type = "Button",
 		Args = {"Hide AineHub", function(Self)
 			if uis.KeyboardEnabled then
-				ts:Create(script.Parent.Menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, script.Parent.Menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					Scale = 0
 				}):Play()
 				hidden=true
 				fu.notification("Press CTRL+SHIFT+Y to bring back the menu.")
 			elseif uis.AccelerometerEnabled then
-				ts:Create(script.Parent.Menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, script.Parent.Menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					Scale = 0
 				}):Play()
 				hidden=true
@@ -4566,7 +4717,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 						v.Enabled = false
 					end
 				end
-				workspace.DescendantAdded:Connect(function(child)
+				AineRuntime.connect(workspace.DescendantAdded, function(child)
 					task.spawn(function()
 						if child:IsA('ForceField') then
 							rs.Heartbeat:Wait()
@@ -4594,7 +4745,7 @@ local function JWXW_routine() -- Routine: StarterGui.YARHM.Universal
 		Args = {2, {
 			Noclip = function()
 				clip = false
-				nocliploop = rs.Stepped:Connect(function()
+				nocliploop = AineRuntime.connect(rs.Stepped, function()
 					if clip == false and game.Players.LocalPlayer.Character ~= nil then
 						for _, child in pairs(game.Players.LocalPlayer.Character:GetDescendants()) do
 							if child:IsA("BasePart") and child.CanCollide == true then
@@ -4924,12 +5075,12 @@ local function BPADER_routine() -- Routine: StarterGui.YARHM.Init
 	end)
 	script.Parent.Menu.HubName.Text = script.Parent.Menu.HubName.Text .. `<font transparency="0.8" size="5">{func.__v}</font>`
 	
-	ts:Create(script.Parent.Menu, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
+	AineRuntime.create(ts, script.Parent.Menu, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 		{Position = UDim2.fromScale(0.5, 0.05)}
 	):Play()
 	
 	task.wait(1)
-	ts:Create(script.Parent.Menu.CanvasGroup, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
+	AineRuntime.create(ts, script.Parent.Menu.CanvasGroup, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 		{GroupTransparency = 1}
 	):Play()
 	func.refreshlist()
@@ -5064,7 +5215,7 @@ local function ISODJDY_routine() -- Routine: StarterGui.YARHM.Forsaken
 		})
 	
 		if progVal then
-			progVal.Changed:Connect(function(new)
+			AineRuntime.connect(progVal.Changed, function(new)
 				espcontainer:Remove(g)
 				addGenerator(g)
 			end)
@@ -5099,7 +5250,7 @@ local function ISODJDY_routine() -- Routine: StarterGui.YARHM.Forsaken
 	end
 	
 	local function listen(parent, signal, callback)
-		local conn = signal:Connect(callback)
+		local conn = AineRuntime.connect(signal, callback)
 		table.insert(conns, conn)
 		return conn
 	end
@@ -5520,7 +5671,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		end	
 		fu.closedialog()
 	else
-		game.ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Gameplay"):WaitForChild("PlayerDataChanged", 5).OnClientEvent:Connect(function(data)
+		AineRuntime.connect(game.ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Gameplay"):WaitForChild("PlayerDataChanged", 5).OnClientEvent, function(data)
 			playerData = data
 			if playerESP then
 				reloadESP()
@@ -5592,10 +5743,11 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		getgenv().YARHM_findSheriff = findSheriff
 		getgenv().YARHM_findSheriffThatsNotMe = findSheriffThatsNotMe
 		getgenv().YARHM_miniFling = miniFling
+		getgenv().YARHM_setLegacyCoinCollect = function(enabled) coinAutoCollect = enabled end
 		getgenv().YARHM_getMap = getMap
 		getgenv().YARHM_isAliveInRound = function(player)
 			local data = playerData and playerData[player.Name]
-			if not data or data.Dead ~= false or data.Killed ~= false then return false end
+			if not data or data.Dead == true or data.Killed == true then return false end
 			if data.Role ~= "Innocent" and data.Role ~= "Sheriff" and data.Role ~= "Hero"
 				and data.Role ~= "Murderer" then return false end
 			local character = player.Character
@@ -5677,7 +5829,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 	module["Name"] = "Murder Mystery 2"
 	
 	-- Player ESP
-	workspace.ChildAdded:Connect(function(ch)
+	AineRuntime.connect(workspace.ChildAdded, function(ch)
 		if ch == getMap() and playerESP then
 			fu.notification("Map has loaded, waiting for roles...")
 			repeat
@@ -5688,7 +5840,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		end
 	end)
 	
-	workspace.ChildRemoved:Connect(function(ch)
+	AineRuntime.connect(workspace.ChildRemoved, function(ch)
 		if ch == getMap() and playerESP then
 			fu.notification("Game ended, removing Player ESPs.")
 			playerData = {}
@@ -5697,7 +5849,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 	end)
 	
 	-- Dropped Gun ESP
-	workspace.DescendantAdded:Connect(function(ch)
+	AineRuntime.connect(workspace.DescendantAdded, function(ch)
 		if trapDetection and ch.Name == "Trap" and (ch.Parent:IsA("Folder") or ch.Parent:IsA("Model")) then
 			ch.Transparency = 0
 			espcontainer:Add(ch, {
@@ -5767,7 +5919,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		end
 	end)
 	
-	workspace.DescendantRemoving:Connect(function(ch)
+	AineRuntime.connect(workspace.DescendantRemoving, function(ch)
 		if gunDropESP and ch.Name == "GunDrop" then
 			espcontainer:RemoveGroup("gun")
 			fu.notification("Someone has took the dropped gun.")
@@ -5857,7 +6009,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 						if closestCoin then
 							if not localplayer.Character:FindFirstChild("HumanoidRootPart") then continue end
 							local distance = (localplayer.Character:FindFirstChild("HumanoidRootPart").Position - closestCoin:GetPivot().Position).Magnitude
-							local toclosestcoin = ts:Create(localplayer.Character:FindFirstChild("HumanoidRootPart"), TweenInfo.new(distance*0.05, Enum.EasingStyle.Linear), {
+							local toclosestcoin = AineRuntime.create(ts, localplayer.Character:FindFirstChild("HumanoidRootPart"), TweenInfo.new(distance*0.05, Enum.EasingStyle.Linear), {
 								CFrame = closestCoin:GetPivot()
 							})
 							toclosestcoin:Play()
@@ -6242,7 +6394,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 			end
 	
 			fu.notification("Waiting for murderer to be in view...")
-			rs.Stepped:Connect(function()
+			AineRuntime.connect(rs.Stepped, function()
 				-- shoot a ray from player to murderer
 				local origin = localplayer.Character.HumanoidRootPart.Position
 				local direction = (Vector3.new(murdererHRP.Position.X, origin.Y, murdererHRP.Position.Z) - origin).unit * 1000
@@ -6578,7 +6730,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 	})
 	
 	local ignoreknifethrow = false
-	game.Workspace.ChildAdded:Connect(function(chi)
+	AineRuntime.connect(game.Workspace.ChildAdded, function(chi)
 		if chi.Name == "ThrowingKnife" and ignoreknifethrow then
 			chi:Destroy()
 		end
@@ -6703,7 +6855,7 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 			if state then
 				if killAuraCon then killAuraCon:Disconnect() end
 			else
-				killAuraCon = game:GetService("RunService").Heartbeat:Connect(function()
+				killAuraCon = AineRuntime.connect(game:GetService("RunService").Heartbeat, function()
 					for _, player in ipairs(game.Players:GetPlayers()) do
 						if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player ~= localplayer then
 							local hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -7321,10 +7473,10 @@ local function WFGBMJ_routine() -- Routine: StarterGui.YARHM.Flee the Facility
 	local gameStatus = game:GetService("ReplicatedStorage"):WaitForChild("GameStatus", 5)
 	
 	if isGameActive and gameStatus then
-		isGameActive.Changed:Connect(function()
+		AineRuntime.connect(isGameActive.Changed, function()
 			reloadESP()
 		end)
-		gameStatus.Changed:Connect(function()
+		AineRuntime.connect(gameStatus.Changed, function()
 			reloadESP()
 		end)
 	end
@@ -7352,7 +7504,7 @@ local function WFGBMJ_routine() -- Routine: StarterGui.YARHM.Flee the Facility
 				local numArgs = select("#", ...)
 				local Args = {...}
 	
-				if Args[1] == "SetPlayerMinigameResult" and getgenv().antifail then 
+				if not AineRuntime.closed and Args[1] == "SetPlayerMinigameResult" and getgenv().antifail then
 					print("Minigame result - Intercepting result to true")
 					Args[2] = true
 	
@@ -7471,7 +7623,7 @@ local function UPQDPIR_routine() -- Routine: StarterGui.YARHM.AdLoader
 	
 	local clickedBefore = false
 	
-	adFrame.Metadata.CTA.MouseButton1Click:Connect(function()
+	AineRuntime.connect(adFrame.Metadata.CTA.MouseButton1Click, function()
 		if addata["type"] == "execute" then
 			if not clickedBefore then
 				loadstring(game:HttpGet(addata["cta"]))
@@ -7495,7 +7647,7 @@ local function UPQDPIR_routine() -- Routine: StarterGui.YARHM.AdLoader
 	end)
 	
 	
-	ts:Create(adFrame, TweenInfo.new(0.5), {
+	AineRuntime.create(ts, adFrame, TweenInfo.new(0.5), {
 		GroupTransparency = 0	
 	}):Play()
 	adFrame.Metadata.TextLabel.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold)
@@ -7529,13 +7681,13 @@ local function QTLC_routine() -- Routine: StarterGui.YARHM.Open.InitOpen
 	
 	
 	script.Parent.Position = UDim2.fromScale(0.5, -1)
-	ts:Create(script.Parent, TweenInfo.new(1.5, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
+	AineRuntime.create(ts, script.Parent, TweenInfo.new(1.5, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
 		Position = UDim2.fromScale(0.5, 0.063)
 	}):Play()
 	
 	
 	task.wait(5)
-	ts:Create(script.Parent, TweenInfo.new(5), {
+	AineRuntime.create(ts, script.Parent, TweenInfo.new(5), {
 		TextTransparency = 1
 	}):Play()
 	--ts:Create(stroke, TweenInfo.new(5), {
@@ -7561,11 +7713,11 @@ local function PCWTI_routine() -- Routine: StarterGui.YARHM.Open.OnClick
 	
 	local clickCount = 0
 	local lastClickTime = tick()
-	script.Parent.MouseButton1Click:Connect(function()
+	AineRuntime.connect(script.Parent.MouseButton1Click, function()
 		local currentTime = tick()
 		
 		script.Parent.TextTransparency = 1
-		ts:Create(script.Parent, TweenInfo.new(1),
+		AineRuntime.create(ts, script.Parent, TweenInfo.new(1),
 			{TextTransparency = 1}
 		):Play()
 		
@@ -7582,7 +7734,7 @@ local function PCWTI_routine() -- Routine: StarterGui.YARHM.Open.OnClick
 		if clickCount == 3 then
 			-- Triple-click detected
 	
-			ts:Create(getgenv().YARHM.Menu, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out), 
+			AineRuntime.create(ts, getgenv().YARHM.Menu, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 				{Position = UDim2.fromScale(0.499, 0.041), Size = UDim2.fromOffset(441, 268)}
 			):Play()
 		end
@@ -7664,7 +7816,7 @@ local function FUQFMZ_routine() -- Routine: StarterGui.YARHM.Open.Resizer
 					initialSize.Y.Scale,
 					initialSize.Y.Offset
 				)
-				ts:Create(guiObject, TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+				AineRuntime.create(ts, guiObject, TweenInfo.new(0.8, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 					Size = newSize
 				}):Play()
 				--guiObject.UIStroke.Transparency = 0
@@ -7672,9 +7824,9 @@ local function FUQFMZ_routine() -- Routine: StarterGui.YARHM.Open.Resizer
 		end
 	end
 	
-	guiObject.InputBegan:Connect(onInputBegan)
-	guiObject.InputEnded:Connect(onInputEnded)
-	userInputService.InputChanged:Connect(onInputChanged)
+	AineRuntime.connect(guiObject.InputBegan, onInputBegan)
+	AineRuntime.connect(guiObject.InputEnded, onInputEnded)
+	AineRuntime.connect(userInputService.InputChanged, onInputChanged)
 	
 end
 local function HOWH_routine() -- Routine: StarterGui.YARHM.FloatingButton.Keybinding
@@ -7765,10 +7917,10 @@ local function RZREO_routine() -- Routine: StarterGui.YARHM.AddCustomModule.Add.
 	
 	local function loadModule(modulelink)
 		if script.Parent.Parent.TextBox.Text == "" and not modulelink then return end
-		ts:Create(script.Parent.Parent.Parent.Menu.UIScale, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		AineRuntime.create(ts, script.Parent.Parent.Parent.Menu.UIScale, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Scale = 1
 		}):Play()
-		ts:Create(script.Parent.Parent, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		AineRuntime.create(ts, script.Parent.Parent, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Position = UDim2.fromScale(0.5, -0.5)
 		}):Play()
 	
@@ -7796,7 +7948,7 @@ local function RZREO_routine() -- Routine: StarterGui.YARHM.AddCustomModule.Add.
 			require(script.Parent.Parent.Parent.FUNCTIONS).notification("Module failed to load...")
 		end
 	end
-	script.Parent.MouseButton1Click:Connect(function() loadModule() end)
+	AineRuntime.connect(script.Parent.MouseButton1Click, function() loadModule() end)
 	
 	-- Additional plugin modules
 	task.wait(1.5)
@@ -7819,11 +7971,11 @@ local function SYVB_routine() -- Routine: StarterGui.YARHM.AddCustomModule.Cance
 
 	local ts = game:GetService("TweenService")
 	
-	script.Parent.MouseButton1Click:Connect(function()
-		ts:Create(script.Parent.Parent.Parent.Menu.UIScale, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	AineRuntime.connect(script.Parent.MouseButton1Click, function()
+		AineRuntime.create(ts, script.Parent.Parent.Parent.Menu.UIScale, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Scale = 1
 		}):Play()
-		ts:Create(script.Parent.Parent, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		AineRuntime.create(ts, script.Parent.Parent, TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Position = UDim2.fromScale(0.5, -0.5)
 		}):Play()
 	end)
@@ -7845,7 +7997,7 @@ local function VHMISPL_routine() -- Routine: StarterGui.YARHM.Menu.UIStroke.UIGr
 
 	local ts = game:GetService("TweenService")
 	
-	ts:Create(script.Parent, TweenInfo.new(
+	AineRuntime.create(ts, script.Parent, TweenInfo.new(
 		10, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut,
 		math.huge, false), {
 			Rotation = -180
@@ -7914,7 +8066,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end
 	
 	-- Render step to update menu position and size based on spring values
-	RunService.RenderStepped:Connect(function()
+	AineRuntime.connect(RunService.RenderStepped, function()
 		if springing then
 			menu.Position = UDim2.new(MenuPosXScale.Offset, MenuPosXOffset.Offset, MenuPosYScale.Offset, MenuPosYOffset.Offset)
 			menu.Size = UDim2.fromOffset(MenuSizeXOffset.Offset, MenuSizeYOffset.Offset)
@@ -7962,7 +8114,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		deltaFrom = clamped
 		MenuRotation:SetGoal(delta.X.Offset * 0.5)
 		setSpringPosGoal(clamped)
-		TweenService:Create(menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+		AineRuntime.create(TweenService, menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 			Scale = 0.95
 		}):Play()
 	end
@@ -7975,24 +8127,24 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end
 	
-	script.Parent.MouseButton1Click:Connect(function()
+	AineRuntime.connect(script.Parent.MouseButton1Click, function()
 		if not textHidden then
 			textHidden = true
-			TweenService:Create(script.Parent.TextLabel, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+			AineRuntime.create(TweenService, script.Parent.TextLabel, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 				TextTransparency = 1,
 				BackgroundTransparency = 1
 			}):Play()
 		end
 		
 		--ph special
-		TweenService:Create(script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
+		AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
 			TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
 			{
 				Size = UDim2.fromOffset(0,0),
 				Position = UDim2.fromScale(.5, 2)
 			}
 		):Play()
-		TweenService:Create(script.Parent.Parent.PHContainer.TextLabel,
+		AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.TextLabel,
 			TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
 			{
 				Size = UDim2.fromOffset(0,0),
@@ -8000,14 +8152,14 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		):Play()
 		
 		if menu.Ad.Interactable then
-			TweenService:Create(menu.Ad, TweenInfo.new(0.5), {
+			AineRuntime.create(TweenService, menu.Ad, TweenInfo.new(0.5), {
 				GroupTransparency = 1
 			}):Play()
 		end
 	
 		
 		
-		TweenService:Create(menu, TweenInfo.new(2, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+		AineRuntime.create(TweenService, menu, TweenInfo.new(2, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 			AnchorPoint = Vector2.new(0.5, 0.5)
 		}):Play()
 		springing = true
@@ -8022,13 +8174,13 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		menu.CanvasGroup.Visible = true
 		OpenerDraggable = true
 		if closing then closing:Cancel() end
-		TweenService:Create(menu.CanvasGroup, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+		AineRuntime.create(TweenService, menu.CanvasGroup, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 			GroupTransparency = 0
 		}):Play()
 	end)
 	
 	MenuDrag.DragEnded = function(vel)
-		TweenService:Create(
+		AineRuntime.create(TweenService,
 			menu.UIScale,
 			TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 			{ Scale = 1 }
@@ -8039,7 +8191,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	
 			if not textHidden then
 				textHidden = true
-				TweenService:Create(
+				AineRuntime.create(TweenService,
 					script.Parent.TextLabel,
 					TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 					{
@@ -8049,7 +8201,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				):Play()
 			end
 	
-			TweenService:Create(
+			AineRuntime.create(TweenService,
 				menu,
 				TweenInfo.new(2, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 				{ AnchorPoint = Vector2.new(0.5, 0.5) }
@@ -8058,14 +8210,14 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			local farPos = Vector3.new(thrownPosition.X.Offset + vel.X * 10, thrownPosition.Y.Offset + vel.Y * 10, 0)
 			
 			--ph special
-			TweenService:Create(script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
+			AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
 				TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
 				{
 					Size = UDim2.fromOffset(0,0),
 					Position = UDim2.fromScale(.5, 2)
 				}
 			):Play()
-			TweenService:Create(script.Parent.Parent.PHContainer.TextLabel,
+			AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.TextLabel,
 				TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
 				{
 					Size = UDim2.fromOffset(0,0),
@@ -8104,7 +8256,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	
 			if closing then closing:Cancel() end
 	
-			TweenService:Create(
+			AineRuntime.create(TweenService,
 				menu.CanvasGroup,
 				TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 				{ GroupTransparency = 0 }
@@ -8120,19 +8272,19 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	-- Opener button behavior
 	local function sign(n) if n>0 then return 1 elseif n<0 then return -1 else return 0 end end
 	local function openMenu()
-		TweenService:Create(menu, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+		AineRuntime.create(TweenService, menu, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 			AnchorPoint = Vector2.new(0.5, 0)
 		}):Play()
 		
 		--ph special
-		TweenService:Create(script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
+		AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
 			TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
 			{
 				Size = UDim2.fromOffset(100,100),
 				Position = UDim2.fromScale(.5, 1.2)
 			}
 		):Play()
-		TweenService:Create(script.Parent.Parent.PHContainer.TextLabel,
+		AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.TextLabel,
 			TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
 			{
 				Size = UDim2.fromOffset(200,40),
@@ -8140,7 +8292,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		):Play()
 		
 		if menu.Ad.Interactable then
-			TweenService:Create(menu.Ad, TweenInfo.new(0.5), {
+			AineRuntime.create(TweenService, menu.Ad, TweenInfo.new(0.5), {
 				GroupTransparency = 0
 			}):Play()
 		end
@@ -8167,15 +8319,15 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		--script.Parent.ZIndex = script.Parent.ZIndex + 2
 		menu.Area.UICorner.CornerRadius = UDim.new(0, 0)
 		menu.List.Visible = true
-		closing = TweenService:Create(menu.CanvasGroup, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+		closing = AineRuntime.create(TweenService, menu.CanvasGroup, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
 			GroupTransparency = 1
 		})
 		closing:Play()
-		closing.Completed:Once(function(state)
+		AineRuntime.once(closing.Completed, function(state)
 			menu.CanvasGroup.Visible = false
 		end)
 	end
-	menu.CanvasGroup.Opener.MouseButton1Click:Connect(openMenu)
+	AineRuntime.connect(menu.CanvasGroup.Opener.MouseButton1Click, openMenu)
 
 	-- ===== CUSTOM: Quick Action Buttons (Grab Gun, Fling Murd, Kill All, Noclip Switch, Shoot Murd) =====
 	local ts2 = game:GetService("TweenService")
@@ -8220,11 +8372,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		local scale = Instance.new("UIScale", btn)
 		scale.Scale = 0
 
-		btn.MouseButton1Down:Connect(function()
-			ts2:Create(scale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.88 }):Play()
+		AineRuntime.connect(btn.MouseButton1Down, function()
+			AineRuntime.create(ts2, scale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.88 }):Play()
 		end)
-		btn.MouseButton1Up:Connect(function()
-			ts2:Create(scale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		AineRuntime.connect(btn.MouseButton1Up, function()
+			AineRuntime.create(ts2, scale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 		end)
 
 		return btn, scale
@@ -8327,18 +8479,18 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local function setAntiFlingState(active)
 		antiFlingActive = active
 		if antiFlingActive then
-			ts2:Create(antiFlingSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, antiFlingSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				BackgroundColor3 = Color3.fromRGB(0, 180, 95)
 			}):Play()
-			ts2:Create(antiFlingKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, antiFlingKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 				Position = UDim2.new(1, -30, 0.5, 0)
 			}):Play()
-			ts2:Create(antiFlingLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, antiFlingLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				Position = UDim2.new(0, 6, 0.5, 0)
 			}):Play()
 
 			if not antiFlingConn then
-				antiFlingConn = rs2.Stepped:Connect(function()
+				antiFlingConn = AineRuntime.connect(rs2.Stepped, function()
 					local lp2 = game:GetService("Players").LocalPlayer
 					local char2 = lp2 and lp2.Character
 					local root2 = char2 and char2:FindFirstChild("HumanoidRootPart")
@@ -8354,13 +8506,13 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				end)
 			end
 		else
-			ts2:Create(antiFlingSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, antiFlingSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 			}):Play()
-			ts2:Create(antiFlingKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, antiFlingKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 				Position = UDim2.new(0, 4, 0.5, 0)
 			}):Play()
-			ts2:Create(antiFlingLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, antiFlingLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				Position = UDim2.new(0, 32, 0.5, 0)
 			}):Play()
 
@@ -8377,8 +8529,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		lastAntiFlingToggle = tick()
 		setAntiFlingState(not antiFlingActive)
 	end
-	antiFlingSwitch.MouseButton1Click:Connect(onAntiFlingToggle)
-	antiFlingSwitch.Activated:Connect(onAntiFlingToggle)
+	AineRuntime.connect(antiFlingSwitch.MouseButton1Click, onAntiFlingToggle)
+	AineRuntime.connect(antiFlingSwitch.Activated, onAntiFlingToggle)
 
 	-- 7. Noclip Switch Toggle (Top-Right)
 	local noclipSwitch = Instance.new("TextButton")
@@ -8437,18 +8589,18 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local function setNoclipState(active)
 		noclipActive = active
 		if noclipActive then
-			ts2:Create(noclipSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, noclipSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				BackgroundColor3 = Color3.fromRGB(0, 180, 95)
 			}):Play()
-			ts2:Create(noclipKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, noclipKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 				Position = UDim2.new(1, -30, 0.5, 0)
 			}):Play()
-			ts2:Create(noclipLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, noclipLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				Position = UDim2.new(0, 6, 0.5, 0)
 			}):Play()
 
 			if not noclipConn then
-				noclipConn = rs2.Stepped:Connect(function()
+				noclipConn = AineRuntime.connect(rs2.Stepped, function()
 					local char = game:GetService("Players").LocalPlayer.Character
 					if char then
 						for _, part in ipairs(char:GetDescendants()) do
@@ -8460,13 +8612,13 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				end)
 			end
 		else
-			ts2:Create(noclipSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, noclipSwitch, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 			}):Play()
-			ts2:Create(noclipKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, noclipKnob, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 				Position = UDim2.new(0, 4, 0.5, 0)
 			}):Play()
-			ts2:Create(noclipLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			AineRuntime.create(ts2, noclipLabel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				Position = UDim2.new(0, 32, 0.5, 0)
 			}):Play()
 
@@ -8488,8 +8640,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		lastNoclipToggle = tick()
 		setNoclipState(not noclipActive)
 	end
-	noclipSwitch.MouseButton1Click:Connect(onNoclipToggle)
-	noclipSwitch.Activated:Connect(onNoclipToggle)
+	AineRuntime.connect(noclipSwitch.MouseButton1Click, onNoclipToggle)
+	AineRuntime.connect(noclipSwitch.Activated, onNoclipToggle)
 
 	local function getNotify()
 		local fu2 = (getgenv and getgenv().YARHMFUNCTIONS) or nil
@@ -8509,7 +8661,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end
 
 
-	local farmSwitch = noclipSwitch:Clone()
+	local farmSwitch = AineRuntime.clone(noclipSwitch)
 	farmSwitch.Name = "AutofarmQuickSwitch"
 	farmSwitch.Position = UDim2.new(1, -20, 0, 102)
 	farmSwitch.Size = UDim2.fromOffset(80, 34)
@@ -8543,15 +8695,58 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 
 	local function setFarmEnabled(enabled)
 		farmEnabled = enabled
+		local disableLegacy = getgenv and getgenv().YARHM_setLegacyCoinCollect
+		if enabled and disableLegacy then disableLegacy(false) end
 		farmSwitch.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(40, 40, 40)
 		farmKnob.Position = enabled and UDim2.new(1, -30, 0.5, 0) or UDim2.new(0, 4, 0.5, 0)
 		farmLabel.Position = enabled and UDim2.new(0, 6, 0.5, 0) or UDim2.new(0, 32, 0.5, 0)
 		if not enabled then releaseFarm(true) end
 		getNotify()(enabled and "Autofarm enabled." or "Autofarm disabled.")
 	end
-	farmSwitch.Activated:Connect(function() setFarmEnabled(not farmEnabled) end)
+	AineRuntime.connect(farmSwitch.Activated, function() setFarmEnabled(not farmEnabled) end)
 
-	local function farmDepthBelowPickup(map, container, position, character)
+	local farmPickups = setmetatable({}, {__mode = "k"})
+	local farmBagFull = false
+	local farmRoundEnded = false
+	local function farmPickupRecord(part, transmitter)
+		local record = farmPickups[part]
+		if not record or record.transmitter ~= transmitter then
+			record = {position = part.Position, transmitter = transmitter}
+			farmPickups[part] = record
+		end
+		if (part.Position - record.position).Magnitude > 3 then record.collected = true end
+		return record
+	end
+	local function activeFarmPickup(part, transmitter, record, container)
+		return part and part:IsDescendantOf(container) and transmitter and transmitter.Parent == part
+			and part.CanTouch and not record.collected and (part.Position - record.position).Magnitude <= 3
+	end
+	local gameplay = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+	gameplay = gameplay and gameplay:FindFirstChild("Gameplay")
+	if gameplay then
+		local collected = gameplay:FindFirstChild("CoinCollected")
+		if collected and collected:IsA("RemoteEvent") then
+			AineRuntime.connect(collected.OnClientEvent, function(_, current, maximum)
+				if type(current) == "number" and type(maximum) == "number" and maximum > 0 then
+					farmBagFull = current >= maximum
+				end
+			end)
+		end
+		local roundStart = gameplay:FindFirstChild("RoundStart")
+		if roundStart and roundStart:IsA("RemoteEvent") then
+			AineRuntime.connect(roundStart.OnClientEvent, function()
+				farmBagFull, farmRoundEnded = false, false
+				farmCooldown = setmetatable({}, {__mode = "k"})
+				farmPickups = setmetatable({}, {__mode = "k"})
+			end)
+		end
+		local roundEnd = gameplay:FindFirstChild("RoundEndFade")
+		if roundEnd and roundEnd:IsA("RemoteEvent") then
+			AineRuntime.connect(roundEnd.OnClientEvent, function() farmRoundEnded = true; releaseFarm(true) end)
+		end
+	end
+
+	local function hasFarmFloor(map, container, position)
 		local params = RaycastParams.new()
 		params.FilterType = Enum.RaycastFilterType.Exclude
 		local ignored = {container}
@@ -8560,21 +8755,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 		params.FilterDescendantsInstances = ignored
 		params.RespectCanCollide = true
-		local hit = workspace:Raycast(position + Vector3.new(0, 0.5, 0), Vector3.new(0, -10, 0), params)
-		local _, size = character:GetBoundingBox()
-		local clearance = math.clamp(size.Y / 2, 2, 4) + 0.5
-		if hit and hit.Instance:IsDescendantOf(map) then
-			local floor = hit.Instance
-			local floorBottom = hit.Position.Y
-			if floor:IsA("BasePart") then
-				local verticalExtent = (math.abs(floor.CFrame.RightVector.Y) * floor.Size.X
-					+ math.abs(floor.CFrame.UpVector.Y) * floor.Size.Y
-					+ math.abs(floor.CFrame.LookVector.Y) * floor.Size.Z) / 2
-				floorBottom = floor.Position.Y - verticalExtent
-			end
-			return math.max(floorBottom - clearance, position.Y - 8)
-		end
-		return position.Y - 6
+		local hit = workspace:Raycast(position + Vector3.new(0, 2, 0), Vector3.new(0, -10, 0), params)
+		return hit ~= nil and hit.Instance:IsDescendantOf(map) and hit.Position.Y <= position.Y + 1.5
 	end
 
 	local function farmStep(dt)
@@ -8586,7 +8768,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		local env = getgenv and getgenv()
 		local map = env and env.YARHM_getMap and env.YARHM_getMap()
 		local alive = env and env.YARHM_isAliveInRound
-		if not root or not hum or hum.Health <= 0 or not map or not alive or not alive(lp) then
+		if farmBagFull or farmRoundEnded or not root or not hum or hum.Health <= 0 or not map or not alive or not alive(lp) then
 			releaseFarm(true)
 			return
 		end
@@ -8612,40 +8794,44 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
-		if not session.target or (not session.target:IsDescendantOf(container)
-			and session.phase ~= "wait" and session.phase ~= "retreat") then
-			session.target = nil
+		if not session.part then
 			local murderer = env.YARHM_findMurderer and env.YARHM_findMurderer()
 			local murdererRoot = murderer and murderer ~= lp and murderer.Character and murderer.Character:FindFirstChild("HumanoidRootPart")
 			local nearest = math.huge
-			for _, coin in ipairs(container:GetChildren()) do
-				local touch = coin:FindFirstChildWhichIsA("TouchTransmitter", true)
-				local part = touch and touch.Parent or (coin:IsA("BasePart") and coin or coin:FindFirstChildWhichIsA("BasePart", true))
+			for _, transmitter in ipairs(container:GetDescendants()) do
+				local part = transmitter:IsA("TouchTransmitter") and transmitter.Parent
 				if part and part:IsA("BasePart") then
-					if (farmCooldown[coin] or 0) <= tick()
-						and (not murdererRoot or (part.Position - murdererRoot.Position).Magnitude > 20) then
-						local distance = (part.Position - root.Position).Magnitude
-						if distance < nearest then nearest = distance; session.target = coin; session.part = part end
+					local record = farmPickupRecord(part, transmitter)
+					if activeFarmPickup(part, transmitter, record, container) and (farmCooldown[part] or 0) <= tick()
+						and (not murdererRoot or (record.position - murdererRoot.Position).Magnitude > 20) then
+						local distance = (record.position - root.Position).Magnitude
+						if distance < nearest and hasFarmFloor(map, container, record.position) then
+							nearest = distance
+							session.part, session.transmitter, session.record = part, transmitter, record
+						end
 					end
 				end
 			end
-			if not session.target then return end
-			session.coinPosition = session.part.Position
-			session.depth = farmDepthBelowPickup(map, container, session.coinPosition, char)
+			if not session.part then return end
+			session.coinPosition = session.record.position
+			session.depth = session.coinPosition.Y - 4.5
 			if session.depth <= workspace.FallenPartsDestroyHeight + 12 then
-				setFarmEnabled(false)
-				getNotify()("Autofarm stopped: not enough room above the void.")
+				farmCooldown[session.part] = tick() + 10
+				session.part = nil
 				return
 			end
 			session.phase = "descend"
 		end
-		if session.part:IsDescendantOf(container) then session.coinPosition = session.part.Position end
 		local coinPosition = session.coinPosition
+		local active = activeFarmPickup(session.part, session.transmitter, session.record, container)
+		if not active then
+			session.record.collected = true
+			session.phase = "retreat"
+		end
 		local murderer = env.YARHM_findMurderer and env.YARHM_findMurderer()
 		local murdererRoot = murderer and murderer ~= lp and murderer.Character and murderer.Character:FindFirstChild("HumanoidRootPart")
-		if murdererRoot and (murdererRoot.Position - coinPosition).Magnitude <= 20
-			and (session.phase == "pickup" or session.phase == "wait") then
-			farmCooldown[session.target] = tick() + 3
+		if murdererRoot and (murdererRoot.Position - coinPosition).Magnitude <= 20 then
+			farmCooldown[session.part] = tick() + 3
 			session.phase = "retreat"
 		end
 		local destination
@@ -8653,41 +8839,44 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			destination = Vector3.new(root.Position.X, session.depth, root.Position.Z)
 		elseif session.phase == "travel" or session.phase == "retreat" then
 			destination = Vector3.new(coinPosition.X, session.depth, coinPosition.Z)
-		else destination = coinPosition end
-		local delta = destination - root.Position
-		local step = 35 * math.min(dt, 0.1)
-		if delta.Magnitude > step then
-			root.CFrame = CFrame.new(root.Position + delta.Unit * step) * root.CFrame.Rotation
-			return
+		else
+			destination = coinPosition
 		end
-		root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
+		local delta = destination - root.Position
+		local step = 24 * math.min(dt, 0.1)
+		local nextPosition = delta.Magnitude > step and root.Position + delta.Unit * step or destination
+		local targetRoot = CFrame.new(nextPosition) * root.CFrame.Rotation
+		char:PivotTo(targetRoot * root.CFrame:ToObjectSpace(char:GetPivot()))
+		if delta.Magnitude > step then return end
 		if session.phase == "descend" then session.phase = "travel"
 		elseif session.phase == "travel" then session.phase = "pickup"
 		elseif session.phase == "pickup" then
-			if firetouchinterest then
-				pcall(function()
-					firetouchinterest(root, session.part, 0)
-					firetouchinterest(root, session.part, 1)
-				end)
+			if firetouchinterest and active then
+				pcall(function() firetouchinterest(root, session.part, 0) end)
 			end
 			session.untilTime = tick() + 1
 			session.phase = "wait"
-		elseif session.phase == "wait" and tick() >= session.untilTime then
-			farmCooldown[session.target] = tick() + 8
-			session.phase = "retreat"
-		elseif session.phase == "retreat" then session.target = nil end
+		elseif session.phase == "wait" then
+			if firetouchinterest and active then
+				pcall(function() firetouchinterest(root, session.part, 1) end)
+			end
+			if tick() >= session.untilTime then
+				farmCooldown[session.part] = tick() + 3
+				session.phase = "retreat"
+			end
+		elseif session.phase == "retreat" then session.part = nil end
 	end
-	local farmConnection = rs2.Heartbeat:Connect(function(dt)
-		local ok = pcall(farmStep, dt)
+	local farmConnection = AineRuntime.connect(rs2.Heartbeat, function(dt)
+		local ok, err = pcall(farmStep, dt)
 		if not ok then
 			farmEnabled = false
 			releaseFarm(true)
 			farmSwitch.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 			farmKnob.Position = UDim2.new(0, 4, 0.5, 0)
-			getNotify()("Autofarm stopped after a movement error.")
+			getNotify()("Autofarm stopped: " .. tostring(err))
 		end
 	end)
-	farmSwitch.Destroying:Connect(function()
+	AineRuntime.connect(farmSwitch.Destroying, function()
 		farmEnabled = false
 		farmConnection:Disconnect()
 		releaseFarm(true)
@@ -8695,7 +8884,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 
 
 	local function makeTeleportButton(name, label, rightOffset)
-		local button = antiFlingSwitch:Clone()
+		local button = AineRuntime.clone(antiFlingSwitch)
 		button.Name = name
 		button.AnchorPoint = Vector2.new(1, 0)
 		button.Size = UDim2.fromOffset(80, 34)
@@ -8753,8 +8942,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
 	end
-	mapTeleportBtn.Activated:Connect(function() teleportToSpawns(false) end)
-	lobbyTeleportBtn.Activated:Connect(function() teleportToSpawns(true) end)
+	AineRuntime.connect(mapTeleportBtn.Activated, function() teleportToSpawns(false) end)
+	AineRuntime.connect(lobbyTeleportBtn.Activated, function() teleportToSpawns(true) end)
 
 	-- Handlers
 	local lastShoot = 0
@@ -8849,6 +9038,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			if returnPivot then teleportShotBusy = false end
 		end
 		if teleportShot then
+			AineRuntime.onClose(stopHover)
 			local root = char:FindFirstChild("HumanoidRootPart")
 			if not root then return end
 			returnPivot = char:GetPivot()
@@ -8870,7 +9060,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			hover.Velocity = Vector3.zero
 			hover.Parent = root
 			follow()
-			hoverConnection = rs2.Heartbeat:Connect(follow)
+			hoverConnection = AineRuntime.connect(rs2.Heartbeat, follow)
 			task.delay(0.75, stopHover)
 			task.wait(0.12)
 			if cleanedUp or lp.Character ~= char or not root.Parent or not murdHRP.Parent then stopHover(); return end
@@ -9056,6 +9246,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
 			if player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player ~= lp then
 				pcall(function()
+					AineRuntime.remember(player.Character.HumanoidRootPart, "Anchored")
 					player.Character.HumanoidRootPart.Anchored = true
 					player.Character.HumanoidRootPart.CFrame = root.CFrame + root.CFrame.LookVector * 1
 				end)
@@ -9072,7 +9263,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local autoGrab = false
 	local autoGrabBusy = false
 	local autoGrabElapsed = 0
-	local autoGrabConnection = rs2.Heartbeat:Connect(function(dt)
+	local autoGrabConnection = AineRuntime.connect(rs2.Heartbeat, function(dt)
 		autoGrabElapsed = autoGrabElapsed + dt
 		if not autoGrab or autoGrabBusy or flingBusy or autoGrabElapsed < 0.5 then return end
 		autoGrabElapsed = 0
@@ -9105,7 +9296,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			gestureInput, gestureStart = nil, nil
 			gestureTravel = 0
 		end
-		button.InputBegan:Connect(function(input)
+		AineRuntime.connect(button.InputBegan, function(input)
 			if gestureInput or not button.Visible then return end
 			if input.UserInputType ~= Enum.UserInputType.MouseButton1
 				and input.UserInputType ~= Enum.UserInputType.Touch then return end
@@ -9113,7 +9304,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			gestureStart = pointerPosition(input)
 			gestureTravel = 0
 		end)
-		local gestureMoved = UserInputService.InputChanged:Connect(function(input)
+		local gestureMoved = AineRuntime.connect(UserInputService.InputChanged, function(input)
 			if not gestureInput then return end
 			if input ~= gestureInput and not (gestureInput.UserInputType == Enum.UserInputType.MouseButton1
 				and input.UserInputType == Enum.UserInputType.MouseMovement) then return end
@@ -9121,7 +9312,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				and Vector2.new(input.Position.X, input.Position.Y) or UserInputService:GetMouseLocation()
 			gestureTravel = math.max(gestureTravel, (position - gestureStart).Magnitude)
 		end)
-		local gestureEnded = UserInputService.InputEnded:Connect(function(input)
+		local gestureEnded = AineRuntime.connect(UserInputService.InputEnded, function(input)
 			if not gestureInput then return end
 			if input ~= gestureInput and not (gestureInput.UserInputType == Enum.UserInputType.MouseButton1
 				and input.UserInputType == Enum.UserInputType.MouseButton1) then return end
@@ -9135,11 +9326,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				tap()
 			end
 		end)
-		local gestureFocusLost = UserInputService.WindowFocusReleased:Connect(resetGesture)
-		button:GetPropertyChangedSignal("Visible"):Connect(function()
+		local gestureFocusLost = AineRuntime.connect(UserInputService.WindowFocusReleased, resetGesture)
+		AineRuntime.connect(button:GetPropertyChangedSignal("Visible"), function()
 			if not button.Visible then resetGesture() end
 		end)
-		button.Destroying:Connect(function()
+		AineRuntime.connect(button.Destroying, function()
 			resetGesture()
 			gestureMoved:Disconnect()
 			gestureEnded:Disconnect()
@@ -9171,7 +9362,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		button.ZIndex = 1001
 		button.Visible = true
 		scale.Scale = 1
-		button.Activated:Connect(function()
+		AineRuntime.connect(button.Activated, function()
 			flingPopup.Visible = false
 			runFling(sheriff, everyone)
 		end)
@@ -9179,23 +9370,48 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	addFlingOption("Murd", Color3.fromRGB(197, 0, 0), 0, false, false)
 	addFlingOption("Sheriff", Color3.fromRGB(0, 100, 220), 1, true, false)
 	addFlingOption("Innocent", Color3.fromRGB(0, 160, 85), 2, false, true)
-	flingBtn.Activated:Connect(function()
+	AineRuntime.connect(flingBtn.Activated, function()
 		flingPopup.Visible = not flingPopup.Visible
 	end)
-	flingBtn:GetPropertyChangedSignal("Visible"):Connect(function()
+	AineRuntime.connect(flingBtn:GetPropertyChangedSignal("Visible"), function()
 		if not flingBtn.Visible then flingPopup.Visible = false end
 	end)
-	flingBtn.Destroying:Connect(function() flingPopup:Destroy() end)
+	AineRuntime.connect(flingBtn.Destroying, function() flingPopup:Destroy() end)
 	bindSwipe(shootMurdBtn, function() onShootClick(false) end, function() onShootClick(true) end)
-	killAllBtn.Activated:Connect(onKillAllClick)
-	grabGunBtn.Destroying:Connect(function()
+	AineRuntime.connect(killAllBtn.Activated, onKillAllClick)
+	AineRuntime.connect(grabGunBtn.Destroying, function()
 		autoGrab = false
 		autoGrabConnection:Disconnect()
 	end)
 
+	AineRuntime.onClose(function()
+		autoGrab = false
+		farmEnabled = false
+		releaseFarm(true)
+		if noclipConn then noclipConn:Disconnect() end
+		if antiFlingConn then antiFlingConn:Disconnect() end
+		flingPopup.Visible = false
+	end)
+	local fullCloseButton = Instance.new("TextButton")
+	fullCloseButton.Name = "FullCloseButton"
+	fullCloseButton.Text = "CLOSE SCRIPT"
+	fullCloseButton.Font = Enum.Font.GothamBold
+	fullCloseButton.TextSize = 12
+	fullCloseButton.TextColor3 = Color3.new(1, 1, 1)
+	fullCloseButton.BackgroundColor3 = Color3.fromRGB(165, 25, 35)
+	fullCloseButton.BorderSizePixel = 0
+	fullCloseButton.AnchorPoint = Vector2.new(1, 0)
+	fullCloseButton.Position = UDim2.new(1, -12, 0, 10)
+	fullCloseButton.Size = UDim2.fromOffset(112, 28)
+	fullCloseButton.ZIndex = 1000000000
+	fullCloseButton.Parent = menu
+	Instance.new("UICorner", fullCloseButton).CornerRadius = UDim.new(0, 8)
+	AineRuntime.connect(fullCloseButton.Activated, function() AineRuntime.close() end)
+
 	-- Sync visibility smoothly with minimized state
 	local _quickBtnsVisible = false
 	local function updateQuickBtnsVisibility()
+		fullCloseButton.Visible = OpenerDraggable ~= true
 		local shouldShow = (OpenerDraggable == true) or (menu.CanvasGroup and menu.CanvasGroup.Visible == true)
 		if shouldShow ~= _quickBtnsVisible then
 			_quickBtnsVisible = shouldShow
@@ -9214,11 +9430,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			if shouldShow then
 				for _, item in ipairs(btns) do
 					item.btn.Visible = true
-					ts2:Create(item.sc, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+					AineRuntime.create(ts2, item.sc, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 				end
 			else
 				for _, item in ipairs(btns) do
-					ts2:Create(item.sc, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0 }):Play()
+					AineRuntime.create(ts2, item.sc, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0 }):Play()
 				end
 				task.delay(0.15, function()
 					if not _quickBtnsVisible then
@@ -9231,9 +9447,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end
 
-	rs2.Heartbeat:Connect(updateQuickBtnsVisibility)
+	AineRuntime.connect(rs2.Heartbeat, updateQuickBtnsVisibility)
 	-- ===== END CUSTOM =====
-	UserInputService.InputBegan:Connect(function(inp, proc)
+	AineRuntime.connect(UserInputService.InputBegan, function(inp, proc)
 		if proc then return end
 	
 		if UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) and inp.KeyCode == Enum.KeyCode.Y then
@@ -9255,7 +9471,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		return angle
 	end
 	
-	RunService.RenderStepped:Connect(function(dt)
+	AineRuntime.connect(RunService.RenderStepped, function(dt)
 		local look = cam.CFrame.LookVector
 	
 		local oldYaw   = math.atan2(lastLook.X, lastLook.Z)        
@@ -9360,11 +9576,11 @@ local function IWVE_routine() -- Routine: StarterGui.YARHM.Menu.List.AddCustomMo
 
 	local ts = game:GetService("TweenService")
 	
-	script.Parent.MouseButton1Click:Connect(function()
-		ts:Create(script.Parent.Parent.Parent.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	AineRuntime.connect(script.Parent.MouseButton1Click, function()
+		AineRuntime.create(ts, script.Parent.Parent.Parent.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Scale = 0.9
 		}):Play()
-		ts:Create(script.Parent.Parent.Parent.Parent.AddCustomModule, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		AineRuntime.create(ts, script.Parent.Parent.Parent.Parent.AddCustomModule, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Position = UDim2.fromScale(0.5, 0.5)
 		}):Play()
 	end)
@@ -9392,39 +9608,39 @@ local function ZUETYL_routine() -- Routine: StarterGui.YARHM.Menu.PHContainer.PH
 	local stillshowingtip = false
 	
 	script.Parent.Rotation = 5
-	local slowRotatorLoop = ts:Create(script.Parent, TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+	local slowRotatorLoop = AineRuntime.create(ts, script.Parent, TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
 		Rotation = -5	
 	})
 	slowRotatorLoop:Play()
 	
 	local function jelly()
-		ts:Create(script.Parent.PH, TweenInfo.new(0.1, Enum.EasingStyle.Linear), {
+		AineRuntime.create(ts, script.Parent.PH, TweenInfo.new(0.1, Enum.EasingStyle.Linear), {
 			Size = UDim2.new(0, 100, 0, 90)
 		}):Play()
 		task.wait(0.1)
-		ts:Create(script.Parent.PH, TweenInfo.new(1.5, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
+		AineRuntime.create(ts, script.Parent.PH, TweenInfo.new(1.5, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {
 			Size = UDim2.new(0, 100, 0, 100)
 		}):Play()
 	end
 	
 	
-	ts:Create(script.Parent, TweenInfo.new(1.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+	AineRuntime.create(ts, script.Parent, TweenInfo.new(1.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 		Position = UDim2.new(0.5, 0, 1.2, 0)
 	}):Play()
 	
 	
-	script.Parent.Parent.Tap.MouseButton1Click:Connect(function()
+	AineRuntime.connect(script.Parent.Parent.Tap.MouseButton1Click, function()
 		jelly()
 		
 		if not stillshowingtip then
 			stillshowingtip = true
-			ts:Create(script.Parent.Parent.Parent.TextLabel, TweenInfo.new(0.5), {
+			AineRuntime.create(ts, script.Parent.Parent.Parent.TextLabel, TweenInfo.new(0.5), {
 				TextTransparency = 0,
 				BackgroundTransparency = 0.4,
 				Position = UDim2.new(0.5, 0, 0.2, 0)
 			}):Play()
 			task.wait(5)
-			ts:Create(script.Parent.Parent.Parent.TextLabel, TweenInfo.new(0.5), {
+			AineRuntime.create(ts, script.Parent.Parent.Parent.TextLabel, TweenInfo.new(0.5), {
 				TextTransparency = 1,
 				BackgroundTransparency = 1,
 				Position = UDim2.new(0.5, 0, 0.3, 0)
@@ -9452,7 +9668,7 @@ local function MHQJ_routine() -- Routine: StarterGui.YARHM.FloatingButtonSetting
 
     -- Â© Aetherion 2026
 
-	script.Parent.MouseButton1Click:Connect(function()
+	AineRuntime.connect(script.Parent.MouseButton1Click, function()
 		getgenv().YARHMFUNCTIONS.ftToggleVisibility()
 	end)
 end
@@ -9471,7 +9687,7 @@ local function UNJJOCO_routine() -- Routine: StarterGui.YARHM.FloatingButtonSett
 
     -- Â© Aetherion 2026
 
-	script.Parent.MouseButton1Click:Connect(function()
+	AineRuntime.connect(script.Parent.MouseButton1Click, function()
 		getgenv().YARHMFUNCTIONS.ftToggleLock()
 	end)
 end
@@ -9490,7 +9706,7 @@ local function ZBXBA_routine() -- Routine: StarterGui.YARHM.FloatingButtonSettin
 
     -- Â© Aetherion 2026
 
-	script.Parent.MouseButton1Click:Connect(function()
+	AineRuntime.connect(script.Parent.MouseButton1Click, function()
 		getgenv().YARHMFUNCTIONS.closeFinetuneFB()
 	end)
 end
