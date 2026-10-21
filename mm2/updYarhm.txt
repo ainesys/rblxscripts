@@ -8512,14 +8512,14 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local farmSwitch = noclipSwitch:Clone()
 	farmSwitch.Name = "AutofarmQuickSwitch"
 	farmSwitch.Position = UDim2.new(1, -20, 0, 102)
-	farmSwitch.Size = UDim2.fromOffset(100, 34)
+	farmSwitch.Size = UDim2.fromOffset(80, 34)
 	farmSwitch.Parent = screenGui
 	local farmScale = farmSwitch:FindFirstChildOfClass("UIScale")
 	farmScale.Scale = 0
 	local farmLabel = farmSwitch:FindFirstChild("NoclipLabel")
 	farmLabel.Name = "AutofarmLabel"
 	farmLabel.Text = "FARM"
-	farmLabel.Size = UDim2.new(0, 64, 0.65, 0)
+	farmLabel.Size = UDim2.new(0, 44, 0.65, 0)
 	local farmKnob = farmSwitch:FindFirstChild("Knob")
 	local farmEnabled = false
 	local farmSession
@@ -8697,11 +8697,15 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local function makeTeleportButton(name, label, rightOffset)
 		local button = antiFlingSwitch:Clone()
 		button.Name = name
+		button.AnchorPoint = Vector2.new(1, 0)
+		button.Size = UDim2.fromOffset(80, 34)
 		button.Position = UDim2.new(1, rightOffset, 0, 18)
 		button.Text = label
 		button.Font = Enum.Font.GothamBold
 		button.TextColor3 = Color3.fromRGB(255, 255, 255)
 		button.TextSize = 13
+		button.TextScaled = false
+		button.TextWrapped = false
 		button.AutoButtonColor = true
 		button:FindFirstChild("AntiFlingLabel"):Destroy()
 		button:FindFirstChild("Knob"):Destroy()
@@ -9065,50 +9069,62 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end)
 	end)
 
-	local function bindHold(button, tap, hold)
-		local activeInput, started, fired
-		local sequence = 0
-		local function reset()
-			sequence = sequence + 1
-			activeInput = nil
+	local function bindSwipe(button, tap, swipeUp)
+		local gestureInput, gestureStart
+		local gestureTravel = 0
+		local function pointerPosition(input)
+			if input.UserInputType == Enum.UserInputType.Touch then
+				return Vector2.new(input.Position.X, input.Position.Y)
+			end
+			return UserInputService:GetMouseLocation()
+		end
+		local function resetGesture()
+			gestureInput, gestureStart = nil, nil
+			gestureTravel = 0
 		end
 		button.InputBegan:Connect(function(input)
-			if activeInput or not button.Visible then return end
+			if gestureInput or not button.Visible then return end
 			if input.UserInputType ~= Enum.UserInputType.MouseButton1
 				and input.UserInputType ~= Enum.UserInputType.Touch then return end
-			activeInput, started, fired = input, os.clock(), false
-			sequence = sequence + 1
-			local token = sequence
-			task.delay(2, function()
-				if activeInput and sequence == token and button.Visible then
-					fired = true
-					hold()
-				end
-			end)
+			gestureInput = input
+			gestureStart = pointerPosition(input)
+			gestureTravel = 0
 		end)
-		local ended = UserInputService.InputEnded:Connect(function(input)
-			if not activeInput then return end
-			if input ~= activeInput and not (activeInput.UserInputType == Enum.UserInputType.MouseButton1
+		local gestureMoved = UserInputService.InputChanged:Connect(function(input)
+			if not gestureInput then return end
+			if input ~= gestureInput and not (gestureInput.UserInputType == Enum.UserInputType.MouseButton1
+				and input.UserInputType == Enum.UserInputType.MouseMovement) then return end
+			local position = gestureInput.UserInputType == Enum.UserInputType.Touch
+				and Vector2.new(input.Position.X, input.Position.Y) or UserInputService:GetMouseLocation()
+			gestureTravel = math.max(gestureTravel, (position - gestureStart).Magnitude)
+		end)
+		local gestureEnded = UserInputService.InputEnded:Connect(function(input)
+			if not gestureInput then return end
+			if input ~= gestureInput and not (gestureInput.UserInputType == Enum.UserInputType.MouseButton1
 				and input.UserInputType == Enum.UserInputType.MouseButton1) then return end
-			local wasHeld = fired or os.clock() - started >= 2
-			local alreadyFired = fired
-			reset()
+			local delta = pointerPosition(input) - gestureStart
+			local travel = math.max(gestureTravel, delta.Magnitude)
+			resetGesture()
 			if not button.Visible then return end
-			local point = Vector2.new(input.Position.X, input.Position.Y)
-			local pos, size = button.AbsolutePosition, button.AbsoluteSize
-			if point.X < pos.X or point.Y < pos.Y or point.X > pos.X + size.X or point.Y > pos.Y + size.Y then return end
-			if wasHeld then
-				if not alreadyFired then hold() end
-			else tap() end
+			if delta.Y <= -32 and -delta.Y > math.abs(delta.X) then
+				swipeUp()
+			elseif travel <= 16 then
+				tap()
+			end
 		end)
+		local gestureFocusLost = UserInputService.WindowFocusReleased:Connect(resetGesture)
 		button:GetPropertyChangedSignal("Visible"):Connect(function()
-			if not button.Visible then reset() end
+			if not button.Visible then resetGesture() end
 		end)
-		local focusLost = UserInputService.WindowFocusReleased:Connect(reset)
-		button.Destroying:Connect(function() reset(); ended:Disconnect(); focusLost:Disconnect() end)
+		button.Destroying:Connect(function()
+			resetGesture()
+			gestureMoved:Disconnect()
+			gestureEnded:Disconnect()
+			gestureFocusLost:Disconnect()
+		end)
 	end
 
-	bindHold(grabGunBtn, function() onGrabGunClick(false) end, function()
+	bindSwipe(grabGunBtn, function() onGrabGunClick(false) end, function()
 		autoGrab = not autoGrab
 		grabGunBtn.Text = autoGrab and "Auto\nGun ON" or "Grab\nGun"
 		grabGunBtn.BackgroundColor3 = autoGrab and Color3.fromRGB(0, 195, 110) or Color3.fromRGB(0, 140, 90)
@@ -9147,58 +9163,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		if not flingBtn.Visible then flingPopup.Visible = false end
 	end)
 	flingBtn.Destroying:Connect(function() flingPopup:Destroy() end)
-	local shootGestureInput, shootGestureStart
-	local shootGestureTravel = 0
-	local function shootPointerPosition(input)
-		if input.UserInputType == Enum.UserInputType.Touch then
-			return Vector2.new(input.Position.X, input.Position.Y)
-		end
-		return UserInputService:GetMouseLocation()
-	end
-	local function resetShootGesture()
-		shootGestureInput, shootGestureStart = nil, nil
-		shootGestureTravel = 0
-	end
-	shootMurdBtn.InputBegan:Connect(function(input)
-		if shootGestureInput or not shootMurdBtn.Visible then return end
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1
-			and input.UserInputType ~= Enum.UserInputType.Touch then return end
-		shootGestureInput = input
-		shootGestureStart = shootPointerPosition(input)
-		shootGestureTravel = 0
-	end)
-	local shootGestureMoved = UserInputService.InputChanged:Connect(function(input)
-		if not shootGestureInput then return end
-		if input ~= shootGestureInput and not (shootGestureInput.UserInputType == Enum.UserInputType.MouseButton1
-			and input.UserInputType == Enum.UserInputType.MouseMovement) then return end
-		local position = shootGestureInput.UserInputType == Enum.UserInputType.Touch
-			and Vector2.new(input.Position.X, input.Position.Y) or UserInputService:GetMouseLocation()
-		shootGestureTravel = math.max(shootGestureTravel, (position - shootGestureStart).Magnitude)
-	end)
-	local shootGestureEnded = UserInputService.InputEnded:Connect(function(input)
-		if not shootGestureInput then return end
-		if input ~= shootGestureInput and not (shootGestureInput.UserInputType == Enum.UserInputType.MouseButton1
-			and input.UserInputType == Enum.UserInputType.MouseButton1) then return end
-		local delta = shootPointerPosition(input) - shootGestureStart
-		local travel = math.max(shootGestureTravel, delta.Magnitude)
-		resetShootGesture()
-		if not shootMurdBtn.Visible then return end
-		if delta.Y <= -32 and -delta.Y > math.abs(delta.X) then
-			onShootClick(true)
-		elseif travel <= 16 then
-			onShootClick(false)
-		end
-	end)
-	local shootGestureFocusLost = UserInputService.WindowFocusReleased:Connect(resetShootGesture)
-	shootMurdBtn:GetPropertyChangedSignal("Visible"):Connect(function()
-		if not shootMurdBtn.Visible then resetShootGesture() end
-	end)
-	shootMurdBtn.Destroying:Connect(function()
-		resetShootGesture()
-		shootGestureMoved:Disconnect()
-		shootGestureEnded:Disconnect()
-		shootGestureFocusLost:Disconnect()
-	end)
+	bindSwipe(shootMurdBtn, function() onShootClick(false) end, function() onShootClick(true) end)
 	killAllBtn.Activated:Connect(onKillAllClick)
 	grabGunBtn.Destroying:Connect(function()
 		autoGrab = false
