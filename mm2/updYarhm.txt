@@ -8673,6 +8673,65 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		releaseFarm(true)
 	end)
 
+
+	local function makeTeleportButton(name, label, rightOffset)
+		local button = antiFlingSwitch:Clone()
+		button.Name = name
+		button.Position = UDim2.new(1, rightOffset, 0, 18)
+		button.Text = label
+		button.Font = Enum.Font.GothamBold
+		button.TextColor3 = Color3.fromRGB(255, 255, 255)
+		button.TextSize = 13
+		button.AutoButtonColor = true
+		button:FindFirstChild("AntiFlingLabel"):Destroy()
+		button:FindFirstChild("Knob"):Destroy()
+		local scale = button:FindFirstChildOfClass("UIScale")
+		scale.Scale = 0
+		button.Parent = screenGui
+		return button, scale
+	end
+	local mapTeleportBtn, mapTeleportScale = makeTeleportButton("MapTeleportQuickBtn", "MAP", -110)
+	local lobbyTeleportBtn, lobbyTeleportScale = makeTeleportButton("LobbyTeleportQuickBtn", "LOBBY", -200)
+	local lastQuickTeleport = 0
+	local function teleportToSpawns(toLobby)
+		if tick() - lastQuickTeleport < 0.5 then return end
+		lastQuickTeleport = tick()
+		local notify = getNotify()
+		if flingBusy then notify("Wait until flinging finishes."); return end
+		local lp = game.Players.LocalPlayer
+		local char = lp.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not root or not hum or hum.Health <= 0 then notify("Character not ready."); return end
+		local destination
+		if toLobby then
+			destination = workspace:FindFirstChild("Lobby")
+		else
+			local getCurrentMap = getgenv and getgenv().YARHM_getMap
+			destination = getCurrentMap and getCurrentMap()
+		end
+		local folder = destination and destination:FindFirstChild("Spawns")
+		local spawns = {}
+		if folder then
+			for _, spawn in ipairs(folder:GetDescendants()) do
+				if spawn:IsA("BasePart") then table.insert(spawns, spawn) end
+			end
+		end
+		if #spawns == 0 then
+			notify(toLobby and "No lobby spawn found." or "No active map spawn found.")
+			return
+		end
+		if farmEnabled then setFarmEnabled(false) end
+		farmPauseUntil = tick() + 2
+		local spawn = spawns[math.random(1, #spawns)]
+		local target = spawn.CFrame + Vector3.new(0, spawn.Size.Y / 2 + hum.HipHeight + root.Size.Y / 2 + 0.5, 0)
+		char:PivotTo(target * root.CFrame:ToObjectSpace(char:GetPivot()))
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	end
+	mapTeleportBtn.Activated:Connect(function() teleportToSpawns(false) end)
+	lobbyTeleportBtn.Activated:Connect(function() teleportToSpawns(true) end)
+
 	-- Handlers
 	local lastShoot = 0
 	local function onShootClick(teleportShot)
@@ -9059,6 +9118,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				{btn = noclipSwitch, sc = noclipScale},
 				{btn = farmSwitch, sc = farmScale},
 				{btn = antiFlingSwitch, sc = antiFlingScale},
+				{btn = mapTeleportBtn, sc = mapTeleportScale},
+				{btn = lobbyTeleportBtn, sc = lobbyTeleportScale},
 				{btn = shootMurdBtn, sc = shootMurdScale}
 			}
 			if shouldShow then
