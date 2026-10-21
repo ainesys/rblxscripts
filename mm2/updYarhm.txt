@@ -8551,6 +8551,32 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end
 	farmSwitch.Activated:Connect(function() setFarmEnabled(not farmEnabled) end)
 
+	local function farmDepthBelowPickup(map, container, position, character)
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		local ignored = {container}
+		for _, player in ipairs(game.Players:GetPlayers()) do
+			if player.Character then table.insert(ignored, player.Character) end
+		end
+		params.FilterDescendantsInstances = ignored
+		params.RespectCanCollide = true
+		local hit = workspace:Raycast(position + Vector3.new(0, 0.5, 0), Vector3.new(0, -10, 0), params)
+		local _, size = character:GetBoundingBox()
+		local clearance = math.clamp(size.Y / 2, 2, 4) + 0.5
+		if hit and hit.Instance:IsDescendantOf(map) then
+			local floor = hit.Instance
+			local floorBottom = hit.Position.Y
+			if floor:IsA("BasePart") then
+				local verticalExtent = (math.abs(floor.CFrame.RightVector.Y) * floor.Size.X
+					+ math.abs(floor.CFrame.UpVector.Y) * floor.Size.Y
+					+ math.abs(floor.CFrame.LookVector.Y) * floor.Size.Z) / 2
+				floorBottom = floor.Position.Y - verticalExtent
+			end
+			return math.max(floorBottom - clearance, position.Y - 8)
+		end
+		return position.Y - 6
+	end
+
 	local function farmStep(dt)
 		if not farmEnabled then return end
 		local lp = game.Players.LocalPlayer
@@ -8586,17 +8612,16 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
-		if not session.target or not session.target:IsDescendantOf(container) then
+		if not session.target or (not session.target:IsDescendantOf(container)
+			and session.phase ~= "wait" and session.phase ~= "retreat") then
 			session.target = nil
 			local murderer = env.YARHM_findMurderer and env.YARHM_findMurderer()
 			local murdererRoot = murderer and murderer ~= lp and murderer.Character and murderer.Character:FindFirstChild("HumanoidRootPart")
 			local nearest = math.huge
-			local lowest = math.huge
 			for _, coin in ipairs(container:GetChildren()) do
 				local touch = coin:FindFirstChildWhichIsA("TouchTransmitter", true)
 				local part = touch and touch.Parent or (coin:IsA("BasePart") and coin or coin:FindFirstChildWhichIsA("BasePart", true))
 				if part and part:IsA("BasePart") then
-					lowest = math.min(lowest, part.Position.Y)
 					if (farmCooldown[coin] or 0) <= tick()
 						and (not murdererRoot or (part.Position - murdererRoot.Position).Magnitude > 20) then
 						local distance = (part.Position - root.Position).Magnitude
@@ -8605,7 +8630,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				end
 			end
 			if not session.target then return end
-			session.depth = lowest - 18
+			session.coinPosition = session.part.Position
+			session.depth = farmDepthBelowPickup(map, container, session.coinPosition, char)
 			if session.depth <= workspace.FallenPartsDestroyHeight + 12 then
 				setFarmEnabled(false)
 				getNotify()("Autofarm stopped: not enough room above the void.")
@@ -8613,8 +8639,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			end
 			session.phase = "descend"
 		end
-		if not session.part.Parent then session.target = nil; return end
-		local coinPosition = session.part.Position
+		if session.part:IsDescendantOf(container) then session.coinPosition = session.part.Position end
+		local coinPosition = session.coinPosition
 		local murderer = env.YARHM_findMurderer and env.YARHM_findMurderer()
 		local murdererRoot = murderer and murderer ~= lp and murderer.Character and murderer.Character:FindFirstChild("HumanoidRootPart")
 		if murdererRoot and (murdererRoot.Position - coinPosition).Magnitude <= 20
@@ -8644,7 +8670,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 					firetouchinterest(root, session.part, 1)
 				end)
 			end
-			session.untilTime = tick() + 0.15
+			session.untilTime = tick() + 1
 			session.phase = "wait"
 		elseif session.phase == "wait" and tick() >= session.untilTime then
 			farmCooldown[session.target] = tick() + 8
