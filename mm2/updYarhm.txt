@@ -9121,7 +9121,58 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		if not flingBtn.Visible then flingPopup.Visible = false end
 	end)
 	flingBtn.Destroying:Connect(function() flingPopup:Destroy() end)
-	bindHold(shootMurdBtn, function() onShootClick(false) end, function() onShootClick(true) end)
+	local shootGestureInput, shootGestureStart
+	local shootGestureTravel = 0
+	local function shootPointerPosition(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			return Vector2.new(input.Position.X, input.Position.Y)
+		end
+		return UserInputService:GetMouseLocation()
+	end
+	local function resetShootGesture()
+		shootGestureInput, shootGestureStart = nil, nil
+		shootGestureTravel = 0
+	end
+	shootMurdBtn.InputBegan:Connect(function(input)
+		if shootGestureInput or not shootMurdBtn.Visible then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		shootGestureInput = input
+		shootGestureStart = shootPointerPosition(input)
+		shootGestureTravel = 0
+	end)
+	local shootGestureMoved = UserInputService.InputChanged:Connect(function(input)
+		if not shootGestureInput then return end
+		if input ~= shootGestureInput and not (shootGestureInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseMovement) then return end
+		local position = shootGestureInput.UserInputType == Enum.UserInputType.Touch
+			and Vector2.new(input.Position.X, input.Position.Y) or UserInputService:GetMouseLocation()
+		shootGestureTravel = math.max(shootGestureTravel, (position - shootGestureStart).Magnitude)
+	end)
+	local shootGestureEnded = UserInputService.InputEnded:Connect(function(input)
+		if not shootGestureInput then return end
+		if input ~= shootGestureInput and not (shootGestureInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseButton1) then return end
+		local delta = shootPointerPosition(input) - shootGestureStart
+		local travel = math.max(shootGestureTravel, delta.Magnitude)
+		resetShootGesture()
+		if not shootMurdBtn.Visible then return end
+		if delta.Y <= -32 and -delta.Y > math.abs(delta.X) then
+			onShootClick(true)
+		elseif travel <= 16 then
+			onShootClick(false)
+		end
+	end)
+	local shootGestureFocusLost = UserInputService.WindowFocusReleased:Connect(resetShootGesture)
+	shootMurdBtn:GetPropertyChangedSignal("Visible"):Connect(function()
+		if not shootMurdBtn.Visible then resetShootGesture() end
+	end)
+	shootMurdBtn.Destroying:Connect(function()
+		resetShootGesture()
+		shootGestureMoved:Disconnect()
+		shootGestureEnded:Disconnect()
+		shootGestureFocusLost:Disconnect()
+	end)
 	killAllBtn.Activated:Connect(onKillAllClick)
 	grabGunBtn.Destroying:Connect(function()
 		autoGrab = false
