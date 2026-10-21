@@ -8182,6 +8182,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local rs2 = game:GetService("RunService")
 	local screenGui = menu.Parent
 	local flingBusy = false
+	local farmPauseUntil = 0
 
 	local function makeQuickButton(name, text, bgColor, pos, anchor, size)
 		local btn = Instance.new("TextButton")
@@ -8513,11 +8514,172 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end
 
+
+	local farmSwitch = noclipSwitch:Clone()
+	farmSwitch.Name = "AutofarmQuickSwitch"
+	farmSwitch.Position = UDim2.new(1, -20, 0, 102)
+	farmSwitch.Size = UDim2.fromOffset(100, 34)
+	farmSwitch.Parent = screenGui
+	local farmScale = farmSwitch:FindFirstChildOfClass("UIScale")
+	farmScale.Scale = 0
+	local farmLabel = farmSwitch:FindFirstChild("NoclipLabel")
+	farmLabel.Name = "AutofarmLabel"
+	farmLabel.Text = "FARM"
+	farmLabel.Size = UDim2.new(0, 64, 0.65, 0)
+	local farmKnob = farmSwitch:FindFirstChild("Knob")
+	local farmEnabled = false
+	local farmSession
+	local farmCooldown = setmetatable({}, {__mode = "k"})
+
+	local function releaseFarm(returnToStart)
+		local session = farmSession
+		farmSession = nil
+		if not session then return end
+		if session.hover then session.hover:Destroy() end
+		if returnToStart and session.character == game.Players.LocalPlayer.Character
+			and session.root.Parent and session.humanoid.Health > 0 then
+			session.character:PivotTo(session.origin)
+			session.root.AssemblyLinearVelocity = Vector3.zero
+			session.root.AssemblyAngularVelocity = Vector3.zero
+		end
+		for part, collided in pairs(session.collisions) do
+			if part.Parent then part.CanCollide = collided end
+		end
+	end
+
+	local function setFarmEnabled(enabled)
+		farmEnabled = enabled
+		farmSwitch.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(40, 40, 40)
+		farmKnob.Position = enabled and UDim2.new(1, -30, 0.5, 0) or UDim2.new(0, 4, 0.5, 0)
+		farmLabel.Position = enabled and UDim2.new(0, 6, 0.5, 0) or UDim2.new(0, 32, 0.5, 0)
+		if not enabled then releaseFarm(true) end
+		getNotify()(enabled and "Autofarm enabled." or "Autofarm disabled.")
+	end
+	farmSwitch.Activated:Connect(function() setFarmEnabled(not farmEnabled) end)
+
+	local function farmStep(dt)
+		if not farmEnabled then return end
+		local lp = game.Players.LocalPlayer
+		local char = lp.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local env = getgenv and getgenv()
+		local map = env and env.YARHM_getMap and env.YARHM_getMap()
+		local alive = env and env.YARHM_isAliveInRound
+		if not root or not hum or hum.Health <= 0 or not map or not alive or not alive(lp) then
+			releaseFarm(true)
+			return
+		end
+		if flingBusy or tick() < farmPauseUntil then releaseFarm(false); return end
+		local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("CoinVisuals") or map:FindFirstChild("Coins")
+		if not container then releaseFarm(true); return end
+		if farmSession and (farmSession.character ~= char or farmSession.map ~= map) then releaseFarm(true) end
+		local session = farmSession
+		if not session then
+			session = {character = char, root = root, humanoid = hum, map = map,
+				origin = char:GetPivot(), collisions = {}, phase = "travel"}
+			farmSession = session
+			session.hover = Instance.new("BodyVelocity")
+			session.hover.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+			session.hover.Velocity = Vector3.zero
+			session.hover.Parent = root
+		end
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				if session.collisions[part] == nil then session.collisions[part] = part.CanCollide end
+				part.CanCollide = false
+			end
+		end
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		if not session.target or not session.target:IsDescendantOf(container) then
+			session.target = nil
+			local murderer = env.YARHM_findMurderer and env.YARHM_findMurderer()
+			local murdererRoot = murderer and murderer ~= lp and murderer.Character and murderer.Character:FindFirstChild("HumanoidRootPart")
+			local nearest = math.huge
+			local lowest = math.huge
+			for _, coin in ipairs(container:GetChildren()) do
+				local touch = coin:FindFirstChildWhichIsA("TouchTransmitter", true)
+				local part = touch and touch.Parent or (coin:IsA("BasePart") and coin or coin:FindFirstChildWhichIsA("BasePart", true))
+				if part and part:IsA("BasePart") then
+					lowest = math.min(lowest, part.Position.Y)
+					if (farmCooldown[coin] or 0) <= tick()
+						and (not murdererRoot or (part.Position - murdererRoot.Position).Magnitude > 20) then
+						local distance = (part.Position - root.Position).Magnitude
+						if distance < nearest then nearest = distance; session.target = coin; session.part = part end
+					end
+				end
+			end
+			if not session.target then return end
+			session.depth = lowest - 18
+			if session.depth <= workspace.FallenPartsDestroyHeight + 12 then
+				setFarmEnabled(false)
+				getNotify()("Autofarm stopped: not enough room above the void.")
+				return
+			end
+			session.phase = "descend"
+		end
+		if not session.part.Parent then session.target = nil; return end
+		local coinPosition = session.part.Position
+		local murderer = env.YARHM_findMurderer and env.YARHM_findMurderer()
+		local murdererRoot = murderer and murderer ~= lp and murderer.Character and murderer.Character:FindFirstChild("HumanoidRootPart")
+		if murdererRoot and (murdererRoot.Position - coinPosition).Magnitude <= 20
+			and (session.phase == "pickup" or session.phase == "wait") then
+			farmCooldown[session.target] = tick() + 3
+			session.phase = "retreat"
+		end
+		local destination
+		if session.phase == "descend" then
+			destination = Vector3.new(root.Position.X, session.depth, root.Position.Z)
+		elseif session.phase == "travel" or session.phase == "retreat" then
+			destination = Vector3.new(coinPosition.X, session.depth, coinPosition.Z)
+		else destination = coinPosition end
+		local delta = destination - root.Position
+		local step = 35 * math.min(dt, 0.1)
+		if delta.Magnitude > step then
+			root.CFrame = CFrame.new(root.Position + delta.Unit * step) * root.CFrame.Rotation
+			return
+		end
+		root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
+		if session.phase == "descend" then session.phase = "travel"
+		elseif session.phase == "travel" then session.phase = "pickup"
+		elseif session.phase == "pickup" then
+			if firetouchinterest then
+				pcall(function()
+					firetouchinterest(root, session.part, 0)
+					firetouchinterest(root, session.part, 1)
+				end)
+			end
+			session.untilTime = tick() + 0.15
+			session.phase = "wait"
+		elseif session.phase == "wait" and tick() >= session.untilTime then
+			farmCooldown[session.target] = tick() + 8
+			session.phase = "retreat"
+		elseif session.phase == "retreat" then session.target = nil end
+	end
+	local farmConnection = rs2.Heartbeat:Connect(function(dt)
+		local ok = pcall(farmStep, dt)
+		if not ok then
+			farmEnabled = false
+			releaseFarm(true)
+			farmSwitch.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+			farmKnob.Position = UDim2.new(0, 4, 0.5, 0)
+			getNotify()("Autofarm stopped after a movement error.")
+		end
+	end)
+	farmSwitch.Destroying:Connect(function()
+		farmEnabled = false
+		farmConnection:Disconnect()
+		releaseFarm(true)
+	end)
+
 	-- Handlers
 	local lastShoot = 0
 	local function onShootClick(teleportShot)
 		if tick() - lastShoot < 0.25 then return end
 		lastShoot = tick()
+		releaseFarm(true)
+		farmPauseUntil = tick() + 1.5
 		local notify = getNotify()
 		local lp = game:GetService("Players").LocalPlayer
 		if not lp then return end
@@ -8637,6 +8799,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local function onGrabGunClick(silent)
 		if tick() - lastGrab < 0.3 then return end
 		lastGrab = tick()
+		releaseFarm(true)
+		farmPauseUntil = tick() + 1
 		local notify = getNotify()
 		local lp = game:GetService("Players").LocalPlayer
 		local char = lp and lp.Character
@@ -8720,6 +8884,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 
 	local function runFling(sheriff, everyone)
 		if flingBusy then return end
+		releaseFarm(true)
 		flingBusy = true
 		local ok, err = pcall(function()
 			if everyone then
@@ -8892,6 +9057,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				{btn = killAllBtn, sc = killAllScale},
 				{btn = flingInnocentBtn, sc = flingInnocentScale},
 				{btn = noclipSwitch, sc = noclipScale},
+				{btn = farmSwitch, sc = farmScale},
 				{btn = antiFlingSwitch, sc = antiFlingScale},
 				{btn = shootMurdBtn, sc = shootMurdScale}
 			}
