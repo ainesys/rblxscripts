@@ -8240,10 +8240,10 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		UDim2.fromOffset(60, 60)
 	)
 
-	-- 2. Fling Murd Button (Top-Left, to the right of Grab Gun)
-	local flingMurdBtn, flingMurdScale = makeQuickButton(
-		"FlingMurdQuickBtn",
-		"Fling\nMurd",
+	-- 2. Fling menu button (to the right of Grab Gun)
+	local flingBtn, flingScale = makeQuickButton(
+		"FlingQuickBtn",
+		"Fling",
 		Color3.fromRGB(200, 85, 0),
 		UDim2.new(0, 90, 0, 60),
 		Vector2.new(0, 0),
@@ -8258,12 +8258,6 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		UDim2.new(0, 20, 0, 130),
 		Vector2.new(0, 0),
 		UDim2.fromOffset(60, 60)
-	)
-
-	local flingInnocentBtn, flingInnocentScale = makeQuickButton(
-		"FlingInnocentQuickBtn", "Fling\nInnocent",
-		Color3.fromRGB(175, 100, 20), UDim2.new(0, 20, 0, 200),
-		Vector2.new(0, 0), UDim2.fromOffset(60, 60)
 	)
 
 	-- 4. Shoot Murd Button (Right side)
@@ -9094,10 +9088,40 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		grabGunBtn.BackgroundColor3 = autoGrab and Color3.fromRGB(0, 195, 110) or Color3.fromRGB(0, 140, 90)
 		getNotify()(autoGrab and "Automatic gun pickup enabled." or "Automatic gun pickup disabled.")
 	end)
-	bindHold(flingMurdBtn, function() runFling(false, false) end, function() runFling(true, false) end)
+	local flingPopup = Instance.new("Frame")
+	flingPopup.Name = "FlingOptionsPopup"
+	flingPopup.BackgroundTransparency = 1
+	flingPopup.Position = UDim2.new(0, 160, 0, 60)
+	flingPopup.Size = UDim2.fromOffset(166, 60)
+	flingPopup.Visible = false
+	flingPopup.ZIndex = 1000
+	flingPopup.Parent = screenGui
+
+	local function addFlingOption(label, color, index, sheriff, everyone)
+		local button, scale = makeQuickButton(
+			"Fling" .. label .. "Option", label, color,
+			UDim2.fromOffset(index * 56, 5), Vector2.zero, UDim2.fromOffset(54, 50)
+		)
+		button.Parent = flingPopup
+		button.ZIndex = 1001
+		button.Visible = true
+		scale.Scale = 1
+		button.Activated:Connect(function()
+			flingPopup.Visible = false
+			runFling(sheriff, everyone)
+		end)
+	end
+	addFlingOption("Murd", Color3.fromRGB(197, 0, 0), 0, false, false)
+	addFlingOption("Sheriff", Color3.fromRGB(0, 100, 220), 1, true, false)
+	addFlingOption("Innocent", Color3.fromRGB(0, 160, 85), 2, false, true)
+	flingBtn.Activated:Connect(function()
+		flingPopup.Visible = not flingPopup.Visible
+	end)
+	flingBtn:GetPropertyChangedSignal("Visible"):Connect(function()
+		if not flingBtn.Visible then flingPopup.Visible = false end
+	end)
+	flingBtn.Destroying:Connect(function() flingPopup:Destroy() end)
 	bindHold(shootMurdBtn, function() onShootClick(false) end, function() onShootClick(true) end)
-	flingMurdBtn.Text = "Fling\nMurd/Sheriff"
-	flingInnocentBtn.Activated:Connect(function() runFling(false, true) end)
 	killAllBtn.Activated:Connect(onKillAllClick)
 	grabGunBtn.Destroying:Connect(function()
 		autoGrab = false
@@ -9110,11 +9134,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		local shouldShow = (OpenerDraggable == true) or (menu.CanvasGroup and menu.CanvasGroup.Visible == true)
 		if shouldShow ~= _quickBtnsVisible then
 			_quickBtnsVisible = shouldShow
+			if not shouldShow then flingPopup.Visible = false end
 			local btns = {
 				{btn = grabGunBtn, sc = grabGunScale},
-				{btn = flingMurdBtn, sc = flingMurdScale},
+				{btn = flingBtn, sc = flingScale},
 				{btn = killAllBtn, sc = killAllScale},
-				{btn = flingInnocentBtn, sc = flingInnocentScale},
 				{btn = noclipSwitch, sc = noclipScale},
 				{btn = farmSwitch, sc = farmScale},
 				{btn = antiFlingSwitch, sc = antiFlingScale},
