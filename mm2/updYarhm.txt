@@ -8023,311 +8023,109 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local UserInputService = game:GetService("UserInputService")
 	
 	local menu = script.Parent.Parent
-	local Spring = require(menu.Parent.Spring)
-	local DraggableObject = require(menu.Parent.DraggableObject)
-	local Bezier = require(menu.Parent.Bezier)
-	
-	-- Tween the TextLabel transparency
-	--TweenService:Create(script.Parent.TextLabel, TweenInfo.new(20, Enum.EasingStyle.Linear), {
-	--	TextTransparency = 1,
-	--	BackgroundTransparency = 1
-	--}):Play()
-	
-	local closed = false
-	local springing = false
-	
-	local closing
-	
-	local lastPos = UDim2.fromScale(0.5, 0.5)
-	local closedLastPos = UDim2.fromScale(0.5, 0.1)
-	
-	-- Initialize springs for menu position and size
-	local MenuPosXScale = Spring.new(0.7, 30, 160, menu.Position.X.Scale, 0, menu.Position.X.Scale)
-	local MenuPosYScale = Spring.new(0.7, 45, 190, 0.05, 0, 0.05)
-	local MenuPosXOffset = Spring.new(0.7, 30, 160, 0, 0)
-	local MenuPosYOffset = Spring.new(0.7, 45, 190, 0, 0)
-	local MenuSizeXOffset = Spring.new(1, 25, 120, menu.Size.X.Offset, 0, menu.Size.X.Offset)
-	local MenuSizeYOffset = Spring.new(1, 25, 120, menu.Size.Y.Offset, 0, menu.Size.Y.Offset)
-	
-	local MenuRotation = Spring.new(1, 18, 100, menu.Rotation, 0, menu.Rotation)
-	
-	
-	-- Functions to update spring goals and offsets
-	local function setSpringPosGoal(udim2)
-		MenuPosXScale:SetGoal(udim2.X.Scale)
-		MenuPosYScale:SetGoal(udim2.Y.Scale)
-		MenuPosXOffset:SetGoal(udim2.X.Offset)
-		MenuPosYOffset:SetGoal(udim2.Y.Offset)
-	end
-	
-	local function setSpringSizeGoal(udim2)
-		MenuSizeXOffset:SetGoal(udim2.X.Offset)
-		MenuSizeYOffset:SetGoal(udim2.Y.Offset)
-	end
-	
-	-- Render step to update menu position and size based on spring values
-	AineRuntime.connect(RunService.RenderStepped, function()
-		if springing then
-			menu.Position = UDim2.new(MenuPosXScale.Offset, MenuPosXOffset.Offset, MenuPosYScale.Offset, MenuPosYOffset.Offset)
-			menu.Size = UDim2.fromOffset(MenuSizeXOffset.Offset, MenuSizeYOffset.Offset)
-			menu.Rotation = MenuRotation.Offset
-			MenuRotation:SetGoal(0)
-		end
-	end)
-	
-	-- Initialize draggable menu
-		local function clampPosToScreen(pos, isMin)
-		local cam = workspace.CurrentCamera
-		local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
-		local sw = math.max(vp.X, 300)
-		local sh = math.max(vp.Y, 300)
-		local w = isMin and 60 or (menu.AbsoluteSize.X > 0 and menu.AbsoluteSize.X or 441)
-		local h = isMin and 60 or (menu.AbsoluteSize.Y > 0 and menu.AbsoluteSize.Y or 268)
-		local halfW = w / 2
-		local rawX = pos.X.Scale * sw + pos.X.Offset
-		local rawY = pos.Y.Scale * sh + pos.Y.Offset
-		local cx = math.clamp(rawX, halfW + 5, sw - halfW - 5)
-		local cy
-		if isMin then
-			cy = math.clamp(rawY, 35, sh - 35)
-		else
-			cy = math.clamp(rawY, 10, math.max(10, sh - 40))
-		end
-		return UDim2.new(pos.X.Scale, cx - pos.X.Scale * sw, pos.Y.Scale, cy - pos.Y.Scale * sh)
+	local closeArea = script.Parent
+	local opener = menu.CanvasGroup.Opener
+	local OpenerDraggable = false
+	local expandedSize = UDim2.fromOffset(441, 268)
+	local expandedPosition = UDim2.fromScale(0.5, 0.05)
+	local minimizedPosition = UDim2.fromScale(0.5, 0.1)
+	local menuTween
+	local dragInput, dragStart, dragOrigin
+	local dragMoved = false
+	local suppressTapUntil = 0
+
+	local function clampMenuPosition(position, minimized)
+		local camera = workspace.CurrentCamera
+		local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+		local width = minimized and 60 or 441
+		local height = minimized and 60 or 268
+		local anchorY = minimized and 0.5 or 0
+		local x = position.X.Scale * viewport.X + position.X.Offset
+		local y = position.Y.Scale * viewport.Y + position.Y.Offset
+		x = math.clamp(x, math.min(width / 2 + 5, viewport.X / 2), math.max(viewport.X - width / 2 - 5, viewport.X / 2))
+		y = math.clamp(y, height * anchorY + 5, math.max(height * anchorY + 5, viewport.Y - height * (1 - anchorY) - 5))
+		return UDim2.new(position.X.Scale, x - position.X.Scale * viewport.X,
+			position.Y.Scale, y - position.Y.Scale * viewport.Y)
 	end
 
-	local MenuDrag = DraggableObject.new(script.Parent, menu, false, true)
-	MenuDrag:Enable()
-	
-	local OpenerMenuDrag = DraggableObject.new(script.Parent.Parent.CanvasGroup.Opener, menu, false, true)
-	OpenerMenuDrag:Enable()
-	local OpenerDraggable = true
-	
-	textHidden = false
-	
-	
-	-- Dragging behavior
-	local deltaFrom = menu.Position
-	MenuDrag.Dragged = function(pos)
-		local clamped = clampPosToScreen(pos, false)
-		local delta = clamped - deltaFrom
-		deltaFrom = clamped
-		MenuRotation:SetGoal(delta.X.Offset * 0.5)
-		setSpringPosGoal(clamped)
-		AineRuntime.create(TweenService, menu.UIScale, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
-			Scale = 0.95
-		}):Play()
+	local function setMenuMinimized(minimized, refresh)
+		if OpenerDraggable == minimized and not refresh then return end
+		if menuTween then menuTween:Cancel() end
+		if minimized and not OpenerDraggable then expandedPosition = clampMenuPosition(menu.Position, false) end
+		OpenerDraggable = minimized
+		closeArea.Visible = not minimized
+		menu.List.Visible = not minimized
+		menu.CanvasGroup.Visible = minimized
+		menu.CanvasGroup.GroupTransparency = minimized and 0 or 1
+		menu.CanvasGroup.Interactable = minimized
+		local corner = menu.Area:FindFirstChildWhichIsA("UICorner")
+		if corner then corner.CornerRadius = UDim.new(0, minimized and 16 or 0) end
+		local label = closeArea:FindFirstChild("TextLabel")
+		if label then label.Visible = false end
+		menuTween = AineRuntime.create(TweenService, menu,
+			TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				AnchorPoint = Vector2.new(0.5, minimized and 0.5 or 0),
+				Position = clampMenuPosition(minimized and minimizedPosition or expandedPosition, minimized),
+				Size = minimized and UDim2.fromOffset(60, 60) or expandedSize
+			})
+		menuTween:Play()
 	end
-	
-	OpenerMenuDrag.Dragged = function(pos)
-		if OpenerDraggable then
-			local clamped = clampPosToScreen(pos, true)
-			closedLastPos = clamped
-			setSpringPosGoal(clamped)
-		end
-	end
-	
-	AineRuntime.connect(script.Parent.MouseButton1Click, function()
-		if not textHidden then
-			textHidden = true
-			AineRuntime.create(TweenService, script.Parent.TextLabel, TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
-				TextTransparency = 1,
-				BackgroundTransparency = 1
-			}):Play()
-		end
-		
-		--ph special
-		AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
-			TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
-			{
-				Size = UDim2.fromOffset(0,0),
-				Position = UDim2.fromScale(.5, 2)
-			}
-		):Play()
-		AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.TextLabel,
-			TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
-			{
-				Size = UDim2.fromOffset(0,0),
-			}
-		):Play()
-		
-		if menu.Ad.Interactable then
-			AineRuntime.create(TweenService, menu.Ad, TweenInfo.new(0.5), {
-				GroupTransparency = 1
-			}):Play()
-		end
-	
-		
-		
-		AineRuntime.create(TweenService, menu, TweenInfo.new(2, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
-			AnchorPoint = Vector2.new(0.5, 0.5)
-		}):Play()
-		springing = true
-		setSpringPosGoal(closedLastPos)
-		setSpringSizeGoal(UDim2.fromOffset(60, 60))
-		--script.Parent.ZIndex = script.Parent.ZIndex - 2
-		if not menu.Area:FindFirstChildWhichIsA("UICorner") then
-			Instance.new("UICorner", menu.Area)
-		end
-		menu.Area:FindFirstChildWhichIsA("UICorner").CornerRadius = UDim.new(0, 16)
-		task.spawn(function() task.wait(0.05) menu.List.Visible = false end)
-		menu.CanvasGroup.Visible = true
-		OpenerDraggable = true
-		if closing then closing:Cancel() end
-		AineRuntime.create(TweenService, menu.CanvasGroup, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
-			GroupTransparency = 0
-		}):Play()
-	end)
-	
-	MenuDrag.DragEnded = function(vel)
-		AineRuntime.create(TweenService,
-			menu.UIScale,
-			TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
-			{ Scale = 1 }
-		):Play()
-	
-		if math.abs(vel.Y) > 10 then
-			local thrownPosition = menu.Position
-	
-			if not textHidden then
-				textHidden = true
-				AineRuntime.create(TweenService,
-					script.Parent.TextLabel,
-					TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
-					{
-						TextTransparency = 1,
-						BackgroundTransparency = 1
-					}
-				):Play()
-			end
-	
-			AineRuntime.create(TweenService,
-				menu,
-				TweenInfo.new(2, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
-				{ AnchorPoint = Vector2.new(0.5, 0.5) }
-			):Play()
-			
-			local farPos = Vector3.new(thrownPosition.X.Offset + vel.X * 10, thrownPosition.Y.Offset + vel.Y * 10, 0)
-			
-			--ph special
-			AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
-				TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
-				{
-					Size = UDim2.fromOffset(0,0),
-					Position = UDim2.fromScale(.5, 2)
-				}
-			):Play()
-			AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.TextLabel,
-				TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
-				{
-					Size = UDim2.fromOffset(0,0),
-				}
-			):Play()
-			
-			springing = true
-			
-			local bezierCurve = Bezier.new(
-				Vector3.new(thrownPosition.X.Offset, thrownPosition.Y.Offset, 0),
-				farPos,
-				Vector3.new(closedLastPos.X.Offset, closedLastPos.Y.Offset, 0)
-			)
-			local points = bezierCurve:GetPath(0.5)
-	
-			--setSpringPosGoal(UDim2.new(closedLastPos.X.Scale, farPos.X, closedLastPos.Y.Scale, farPos.Y))
-			setSpringPosGoal(UDim2.new(closedLastPos.X.Scale, points[math.ceil(#points/2)].X, closedLastPos.Y.Scale, points[math.ceil(#points/2)].Y))
-			setSpringSizeGoal(UDim2.fromOffset(60 - vel.Y * 2, 60 - vel.Y * 2))
-	
-			task.wait(0.1)
-	
-			--task.spawn(function()
-			--	for _, point in bezierCurve:GetPath(0.08) do
-			--		setSpringPosGoal(UDim2.new(closedLastPos.X.Scale, point.X, closedLastPos.Y.Scale, point.Y))
-			--		task.wait()
-			--	end
-			--end)
-	
-			setSpringSizeGoal(UDim2.fromOffset(60, 60))
-			setSpringPosGoal(UDim2.new(closedLastPos.X.Scale, closedLastPos.X.Offset, closedLastPos.Y.Scale, closedLastPos.Y.Offset))
-			menu.Area.UICorner.CornerRadius = UDim.new(0, 16)
-			task.delay(0.25, function() menu.List.Visible = false end)
-			menu.CanvasGroup.Visible = true
-	
-			OpenerDraggable = true
-	
-			if closing then closing:Cancel() end
-	
-			AineRuntime.create(TweenService,
-				menu.CanvasGroup,
-				TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
-				{ GroupTransparency = 0 }
-			):Play()
-		else
-			local clamped = clampPosToScreen(menu.Position, false)
-			lastPos = clamped
-			setSpringPosGoal(clamped)
-		end
-	end
-	
-	
-	-- Opener button behavior
-	local function sign(n) if n>0 then return 1 elseif n<0 then return -1 else return 0 end end
+
 	local function openMenu()
-		AineRuntime.create(TweenService, menu, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
-			AnchorPoint = Vector2.new(0.5, 0)
-		}):Play()
-		
-		--ph special
-		AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.PHContainerInner.Rotator.PH,
-			TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
-			{
-				Size = UDim2.fromOffset(100,100),
-				Position = UDim2.fromScale(.5, 1.2)
-			}
-		):Play()
-		AineRuntime.create(TweenService, script.Parent.Parent.PHContainer.TextLabel,
-			TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), 
-			{
-				Size = UDim2.fromOffset(200,40),
-			}
-		):Play()
-		
-		if menu.Ad.Interactable then
-			AineRuntime.create(TweenService, menu.Ad, TweenInfo.new(0.5), {
-				GroupTransparency = 0
-			}):Play()
+		setMenuMinimized(false)
+	end
+
+	local function pointerPosition(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			return Vector2.new(input.Position.X, input.Position.Y)
 		end
-	
-		local bezierCurve = Bezier.new(
-			Vector3.new(closedLastPos.X.Offset, closedLastPos.Y.Offset, 0),
-			Vector3.new(
-				(closedLastPos.X.Offset + lastPos.X.Offset) / 2,
-				lastPos.Y.Offset + (math.abs(lastPos.Y.Offset - closedLastPos.Y.Offset) * 2.5 * -math.sign(closedLastPos.Y.Offset - lastPos.Y.Offset)),
-				0
-			),
-			Vector3.new(lastPos.X.Offset, lastPos.Y.Offset, 0)
-		)
-	
-		task.spawn(function()
-			for _, point in bezierCurve:GetPath(0.2) do
-				setSpringPosGoal(UDim2.new(closedLastPos.X.Scale, point.X, closedLastPos.Y.Scale, point.Y))
-				task.wait() task.wait() -- 2 heartbeats uwu
-			end
-		end)
-		--setSpringPosGoal(lastPos)
-		setSpringSizeGoal(UDim2.fromOffset(441, 268))
-		OpenerDraggable = false
-		--script.Parent.ZIndex = script.Parent.ZIndex + 2
-		menu.Area.UICorner.CornerRadius = UDim.new(0, 0)
-		menu.List.Visible = true
-		closing = AineRuntime.create(TweenService, menu.CanvasGroup, TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
-			GroupTransparency = 1
-		})
-		closing:Play()
-		AineRuntime.once(closing.Completed, function(state)
-			menu.CanvasGroup.Visible = false
+		return UserInputService:GetMouseLocation()
+	end
+
+	local function bindMenuDrag(handle)
+		AineRuntime.connect(handle.InputBegan, function(input)
+			if dragInput then return end
+			if input.UserInputType ~= Enum.UserInputType.Touch
+				and input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+			dragInput, dragStart, dragOrigin = input, pointerPosition(input), menu.Position
+			dragMoved = false
 		end)
 	end
-	AineRuntime.connect(menu.CanvasGroup.Opener.MouseButton1Click, openMenu)
+	bindMenuDrag(closeArea)
+	bindMenuDrag(opener)
+	AineRuntime.connect(UserInputService.InputChanged, function(input)
+		if not dragInput then return end
+		if input ~= dragInput and not (dragInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseMovement) then return end
+		local delta = pointerPosition(input) - dragStart
+		if delta.Magnitude < 8 and not dragMoved then return end
+		dragMoved = true
+		suppressTapUntil = tick() + 0.3
+		if menuTween then menuTween:Cancel(); menuTween = nil end
+		menu.Position = clampMenuPosition(UDim2.new(dragOrigin.X.Scale, dragOrigin.X.Offset + delta.X,
+			dragOrigin.Y.Scale, dragOrigin.Y.Offset + delta.Y), OpenerDraggable)
+		if OpenerDraggable then minimizedPosition = menu.Position else expandedPosition = menu.Position end
+	end)
+	local function endMenuDrag()
+		if dragMoved then suppressTapUntil = tick() + 0.3 end
+		dragInput, dragStart, dragOrigin = nil, nil, nil
+		dragMoved = false
+	end
+	AineRuntime.connect(UserInputService.InputEnded, function(input)
+		if input == dragInput or (dragInput and dragInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseButton1) then endMenuDrag() end
+	end)
+	AineRuntime.connect(UserInputService.WindowFocusReleased, endMenuDrag)
+	AineRuntime.connect(closeArea.Activated, function()
+		if not dragMoved and tick() >= suppressTapUntil then setMenuMinimized(true) end
+	end)
+	AineRuntime.connect(opener.Activated, function()
+		if not dragMoved and tick() >= suppressTapUntil then openMenu() end
+	end)
+	local readyEvent = closeArea:FindFirstChild("AllowForSpring")
+	if readyEvent then
+		AineRuntime.connect(readyEvent.Event, function() setMenuMinimized(OpenerDraggable, true) end)
+	end
 
 	-- ===== CUSTOM: Quick Action Buttons (Grab Gun, Fling Murd, Kill All, Noclip Switch, Shoot Murd) =====
 	local ts2 = game:GetService("TweenService")
@@ -9625,51 +9423,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end)
 	
-	-- Parallax camera offset
-	local RunService = game:GetService("RunService")
-	local cam = workspace.CurrentCamera
-	
-	local lastLook = cam.CFrame.LookVector
-	local uiOffset = Vector2.new(0, 0)
-	local prevUiOffset = Vector2.new(0, 0)
-	
-	local function normalizeAngle(angle)
-		while angle > math.pi do angle = angle - 2 * math.pi end
-		while angle <= -math.pi do angle = angle + 2 * math.pi end
-		return angle
-	end
-	
-	AineRuntime.connect(RunService.RenderStepped, function(dt)
-		local look = cam.CFrame.LookVector
-	
-		local oldYaw   = math.atan2(lastLook.X, lastLook.Z)        
-		local newYaw   = math.atan2(look.X, look.Z)
-	
-		local oldPitch = math.asin(math.clamp(lastLook.Y, -1, 1))
-		local newPitch = math.asin(math.clamp(look.Y, -1, 1))
-	
-		local deltaYaw   = normalizeAngle(newYaw - oldYaw)
-		local deltaPitch = newPitch - oldPitch  
-	
-		local targetOffset = Vector2.new(deltaYaw * 15, deltaPitch * 15)
-	
-		uiOffset = uiOffset:Lerp(targetOffset, 0.2)
-		--uiOffset = uiOffset * Vector2.new(-1, 1)
-	
-		
-		if not OpenerDraggable then
-			MenuPosXOffset:SetGoal((MenuPosXOffset.Goal - prevUiOffset.X) + uiOffset.X)
-			MenuPosYOffset:SetGoal((MenuPosYOffset.Goal - prevUiOffset.Y) + uiOffset.Y)
-		end
-		prevUiOffset = uiOffset
-		
-		lastLook = look
-	end)
-	
-	
-	
-	script.Parent.AllowForSpring.Event:Wait()
-	springing = true
+
 end
 local function HVVD_routine() -- Routine: StarterGui.YARHM.Menu.List.AutoSetup
     local script = Instance.new("LocalScript")
