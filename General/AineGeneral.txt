@@ -16,6 +16,7 @@ local connections, collisionState, espObjects = {}, {}, {}
 local closed, minimized = false, false
 local antiFling, noclip, esp = false, false, false
 local fly, flight = false, nil
+local savedTP, tpGesture, tpFlashUntil = nil, nil, 0
 local burst, nextBurst, espElapsed = nil, 0, 0
 local tpRow, flingRow
 local function connect(signal, callback)
@@ -71,7 +72,7 @@ local left = make("Frame", {
 }, surface)
 local right = make("Frame", {
 	Name = "QuickToggles", BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -20, 0, 18), Size = UDim2.fromOffset(170, 76),
+	Position = UDim2.new(1, -20, 0, 18), Size = UDim2.fromOffset(170, 118),
 }, surface)
 local function paintToggle(toggle, enabled)
 	toggle.Text = enabled and "ON" or "OFF"
@@ -285,6 +286,74 @@ quickToggle("Fly", 42, function(update)
 	update(fly)
 end, false, 0)
 
+local teleportButton = button(right, "SET TP", UDim2.fromOffset(0, 84), UDim2.fromOffset(80, 34))
+teleportButton.Name = "SavedTeleportButton"
+teleportButton.TextSize = 13
+teleportButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+teleportButton:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(1, 0)
+make("UIStroke", {
+	Color = Color3.new(1, 1, 1), ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Thickness = 2,
+}, teleportButton)
+local function teleportFeedback(text)
+	teleportButton.Text = text
+	tpFlashUntil = os.clock() + 0.9
+end
+local function saveTeleport()
+	local _, _, root = characterParts(player)
+	if not root or burst then teleportFeedback("WAIT"); return end
+	savedTP = root.CFrame
+	teleportButton.BackgroundColor3 = Color3.fromRGB(0, 180, 95)
+	teleportFeedback("SAVED")
+end
+local function teleportSaved()
+	if not savedTP then teleportFeedback("SET FIRST"); return end
+	local _, _, root = characterParts(player)
+	if not root then teleportFeedback("WAIT"); return end
+	if tpRow.enabled then setRow(tpRow, false) end
+	if flingRow.enabled then setRow(flingRow, false) end
+	finishBurst()
+	stopFlight()
+	root.CFrame = savedTP
+	stopMotion(root)
+	teleportFeedback("TP")
+end
+local function trackTeleportGesture(position)
+	local gesture = tpGesture
+	if not gesture then return end
+	gesture.last = position
+	local dx, dy = position.X - gesture.start.X, position.Y - gesture.start.Y
+	gesture.travel = math.max(gesture.travel, math.sqrt(dx * dx + dy * dy))
+end
+connect(teleportButton.InputBegan, function(input)
+	if tpGesture then return end
+	if input.UserInputType ~= Enum.UserInputType.Touch and input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+	tpGesture = {input = input, start = input.Position, last = input.Position, travel = 0}
+end)
+connect(UserInputService.InputChanged, function(input)
+	if not tpGesture then return end
+	if input == tpGesture.input or (tpGesture.input.UserInputType == Enum.UserInputType.MouseButton1
+		and input.UserInputType == Enum.UserInputType.MouseMovement) then
+		trackTeleportGesture(input.Position)
+	end
+end)
+connect(UserInputService.InputEnded, function(input)
+	local gesture = tpGesture
+	if not gesture or input ~= gesture.input then return end
+	trackTeleportGesture(input.Position)
+	tpGesture = nil
+	if input.UserInputState == Enum.UserInputState.Cancel then return end
+	local dx, dy = gesture.last.X - gesture.start.X, gesture.last.Y - gesture.start.Y
+	if dy <= -24 and -dy > math.abs(dx) then
+		saveTeleport()
+	elseif gesture.travel <= 12 then
+		teleportSaved()
+	end
+end)
+connect(teleportButton.Activated, function(input)
+	if not input or (input.UserInputType ~= Enum.UserInputType.Touch
+		and input.UserInputType ~= Enum.UserInputType.MouseButton1) then teleportSaved() end
+end)
+
 local function removeESP(who)
 	local objects = espObjects[who]
 	if objects then
@@ -426,6 +495,7 @@ end
 local function cleanup()
 	if closed then return end
 	closed = true
+	tpGesture = nil
 	for _, connection in ipairs(connections) do connection:Disconnect() end
 	finishBurst()
 	stopFlight()
@@ -437,6 +507,7 @@ shutdown.OnInvoke = cleanup
 connect(close.Activated, cleanup)
 connect(gui.Destroying, cleanup)
 connect(minimize.Activated, function()
+	tpGesture = nil
 	minimized = not minimized
 	left.Visible = not minimized
 	right.Visible = not minimized
@@ -471,7 +542,12 @@ connect(RunService.Stepped, function()
 	end
 end)
 connect(RunService.Heartbeat, function(dt)
-	if closed or not esp then return end
+	if closed then return end
+	if tpFlashUntil > 0 and os.clock() >= tpFlashUntil then
+		teleportButton.Text = savedTP and "TP" or "SET TP"
+		tpFlashUntil = 0
+	end
+	if not esp then return end
 	espElapsed = espElapsed + dt
 	if espElapsed < 0.1 then return end
 	espElapsed = 0
