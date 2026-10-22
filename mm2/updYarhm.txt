@@ -8643,7 +8643,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	AineRuntime.connect(noclipSwitch.MouseButton1Click, onNoclipToggle)
 	AineRuntime.connect(noclipSwitch.Activated, onNoclipToggle)
 
-	local flyUtility = require(Converted["_FlyUtility"])
+	local flyUtility = require(menu.Parent.FlyUtility)
 	local flySwitch = AineRuntime.clone(noclipSwitch)
 	flySwitch.Name = "FlyQuickSwitch"
 	flySwitch.Position = UDim2.new(1, -110, 0, 60)
