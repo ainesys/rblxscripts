@@ -8674,6 +8674,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	farmLabel.Size = UDim2.new(0, 44, 0.65, 0)
 	local farmKnob = farmSwitch:FindFirstChild("Knob")
 	local farmEnabled = false
+	local farmCombat = {enabled = false, busy = false, generation = 0, phase = "start", nextAction = 0}
+	local function resetFarmCombat()
+		farmCombat.generation = farmCombat.generation + 1
+		farmCombat.phase, farmCombat.nextAction, farmCombat.target = "start", 0, nil
+	end
 	local farmSession
 	local farmCooldown = setmetatable({}, {__mode = "k"})
 
@@ -8693,17 +8698,20 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 	end
 
-	local function setFarmEnabled(enabled)
+	local function setFarmEnabled(enabled, combat)
+		resetFarmCombat()
 		farmEnabled = enabled
+		farmCombat.enabled = enabled and combat == true
 		local disableLegacy = getgenv and getgenv().YARHM_setLegacyCoinCollect
 		if enabled and disableLegacy then disableLegacy(false) end
-		farmSwitch.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(40, 40, 40)
+		farmSwitch.BackgroundColor3 = enabled and (farmCombat.enabled and Color3.fromRGB(197, 0, 0)
+			or Color3.fromRGB(0, 180, 95)) or Color3.fromRGB(40, 40, 40)
 		farmKnob.Position = enabled and UDim2.new(1, -30, 0.5, 0) or UDim2.new(0, 4, 0.5, 0)
 		farmLabel.Position = enabled and UDim2.new(0, 6, 0.5, 0) or UDim2.new(0, 32, 0.5, 0)
 		if not enabled then releaseFarm(true) end
-		getNotify()(enabled and "Autofarm enabled." or "Autofarm disabled.")
+		getNotify()(enabled and (farmCombat.enabled and "Autofarm enabled: finish round after bag is full."
+			or "Autofarm enabled.") or "Autofarm disabled.")
 	end
-	AineRuntime.connect(farmSwitch.Activated, function() setFarmEnabled(not farmEnabled) end)
 
 	local farmPickups = setmetatable({}, {__mode = "k"})
 	local farmBagFull = false
@@ -8735,6 +8743,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		local roundStart = gameplay:FindFirstChild("RoundStart")
 		if roundStart and roundStart:IsA("RemoteEvent") then
 			AineRuntime.connect(roundStart.OnClientEvent, function()
+				resetFarmCombat()
 				farmBagFull, farmRoundEnded = false, false
 				farmCooldown = setmetatable({}, {__mode = "k"})
 				farmPickups = setmetatable({}, {__mode = "k"})
@@ -8742,7 +8751,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end
 		local roundEnd = gameplay:FindFirstChild("RoundEndFade")
 		if roundEnd and roundEnd:IsA("RemoteEvent") then
-			AineRuntime.connect(roundEnd.OnClientEvent, function() farmRoundEnded = true; releaseFarm(true) end)
+			AineRuntime.connect(roundEnd.OnClientEvent, function()
+				farmRoundEnded = true
+				resetFarmCombat()
+				releaseFarm(true)
+			end)
 		end
 	end
 
@@ -8958,6 +8971,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		if not lp then return end
 
 		local function findSheriff2()
+			local char = lp.Character
+			local backpack = lp:FindFirstChildOfClass("Backpack")
+			if (char and char:FindFirstChild("Gun")) or (backpack and backpack:FindFirstChild("Gun")) then return lp end
 			if getgenv and getgenv().YARHM_findSheriff then
 				local s = getgenv().YARHM_findSheriff()
 				if s then return s end
@@ -9265,7 +9281,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local autoGrabElapsed = 0
 	local autoGrabConnection = AineRuntime.connect(rs2.Heartbeat, function(dt)
 		autoGrabElapsed = autoGrabElapsed + dt
-		if not autoGrab or autoGrabBusy or flingBusy or autoGrabElapsed < 0.5 then return end
+		if not autoGrab or autoGrabBusy or flingBusy or farmCombat.busy or autoGrabElapsed < 0.5 then return end
 		autoGrabElapsed = 0
 		local lp = game.Players.LocalPlayer
 		local char = lp.Character
@@ -9281,6 +9297,102 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			task.wait(0.4)
 			autoGrabBusy = false
 		end)
+	end)
+
+	local function farmCombatActive(generation, character)
+		local lp = game.Players.LocalPlayer
+		local char = lp.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local alive = getgenv and getgenv().YARHM_isAliveInRound
+		return farmEnabled and farmCombat.enabled and farmBagFull and not farmRoundEnded
+			and (generation == nil or generation == farmCombat.generation)
+			and (character == nil or character == char)
+			and hum and hum.Health > 0 and char:FindFirstChild("HumanoidRootPart") and alive and alive(lp)
+	end
+
+	local function farmTargetAlive(target)
+		local alive = getgenv and getgenv().YARHM_isAliveInRound
+		local char = target and target.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		return target and target.Parent == game.Players and hum and hum.Health > 0 and alive and alive(target)
+	end
+
+	local function farmHasTool(name)
+		local lp = game.Players.LocalPlayer
+		local char = lp.Character
+		local backpack = lp:FindFirstChildOfClass("Backpack")
+		return (char and char:FindFirstChild(name)) or (backpack and backpack:FindFirstChild(name))
+	end
+
+	local farmCombatConnection = AineRuntime.connect(rs2.Heartbeat, function()
+		if not farmCombatActive() then
+			if farmCombat.phase ~= "start" then resetFarmCombat() end
+			return
+		end
+		if farmCombat.busy or flingBusy or autoGrabBusy or teleportShotBusy or tick() < farmCombat.nextAction then return end
+		releaseFarm(true)
+		local generation, character = farmCombat.generation, game.Players.LocalPlayer.Character
+		farmCombat.busy = true
+		task.spawn(function()
+			local ok, err = pcall(function()
+				if not farmCombatActive(generation, character) then return end
+				local lp = game.Players.LocalPlayer
+				local murderer = findRole("Knife", "YARHM_findMurderer")
+				if farmHasTool("Knife") or murderer == lp then
+					onKillAllClick()
+					if farmCombatActive(generation, character) then farmCombat.nextAction = tick() + 2 end
+					return
+				end
+				if not farmTargetAlive(murderer) then
+					farmCombat.nextAction = tick() + 0.5
+					return
+				end
+				if farmCombat.phase == "shot" then
+					if farmCombat.target == murderer then
+						runFling(false, false)
+					end
+					if farmCombatActive(generation, character) then
+						farmCombat.phase, farmCombat.nextAction = "start", tick() + 3
+					end
+					return
+				end
+				if farmHasTool("Gun") then
+					onShootClick(true)
+					if farmCombatActive(generation, character) then
+						farmCombat.phase, farmCombat.target = "shot", murderer
+						farmCombat.nextAction = tick() + 1.2
+					end
+					return
+				end
+				if farmCombat.phase == "pickup" then
+					if tick() < farmCombat.pickupUntil then
+						if workspace:FindFirstChild("GunDrop", true) then onGrabGunClick(true) end
+						if farmCombatActive(generation, character) then farmCombat.nextAction = tick() + 0.5 end
+						return
+					end
+					runFling(false, false)
+					if farmCombatActive(generation, character) then
+						farmCombat.phase, farmCombat.nextAction = "start", tick() + 3
+					end
+					return
+				end
+				local sheriff = findRole("Gun", "YARHM_findSheriff")
+				if sheriff ~= lp and farmTargetAlive(sheriff) then runFling(true, false) end
+				if farmCombatActive(generation, character) then
+					farmCombat.phase, farmCombat.pickupUntil = "pickup", tick() + 5
+					farmCombat.nextAction = tick() + 0.5
+				end
+			end)
+			farmCombat.busy = false
+			if not ok and farmCombatActive(generation, character) then
+				farmCombat.phase, farmCombat.nextAction = "start", tick() + 3
+				getNotify()("Autofarm round action failed: " .. tostring(err))
+			end
+		end)
+	end)
+	AineRuntime.connect(farmSwitch.Destroying, function()
+		resetFarmCombat()
+		farmCombatConnection:Disconnect()
 	end)
 
 	local function bindSwipe(button, tap, swipeUp)
@@ -9338,6 +9450,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		end)
 	end
 
+	bindSwipe(farmSwitch, function() setFarmEnabled(not farmEnabled) end, function()
+		setFarmEnabled(true, true)
+	end)
 	bindSwipe(grabGunBtn, function() onGrabGunClick(false) end, function()
 		autoGrab = not autoGrab
 		grabGunBtn.Text = autoGrab and "Auto\nGun ON" or "Grab\nGun"
@@ -9387,6 +9502,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	AineRuntime.onClose(function()
 		autoGrab = false
 		farmEnabled = false
+		resetFarmCombat()
 		releaseFarm(true)
 		if noclipConn then noclipConn:Disconnect() end
 		if antiFlingConn then antiFlingConn:Disconnect() end
