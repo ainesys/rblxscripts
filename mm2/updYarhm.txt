@@ -8643,6 +8643,40 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	AineRuntime.connect(noclipSwitch.MouseButton1Click, onNoclipToggle)
 	AineRuntime.connect(noclipSwitch.Activated, onNoclipToggle)
 
+	local flyUtility = require(Converted["_FlyUtility"])
+	local flySwitch = AineRuntime.clone(noclipSwitch)
+	flySwitch.Name = "FlyQuickSwitch"
+	flySwitch.Position = UDim2.new(1, -110, 0, 60)
+	flySwitch.Parent = screenGui
+	local flyScale = flySwitch:FindFirstChildOfClass("UIScale")
+	flyScale.Scale = 0
+	local flyLabel = flySwitch:FindFirstChild("NoclipLabel")
+	flyLabel.Name, flyLabel.Text = "FlyLabel", "FLY"
+	local flyKnob = flySwitch:FindFirstChild("Knob")
+	local flyShownActive = false
+	local function updateFlySwitch(active)
+		flyShownActive = active
+		local tween = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		AineRuntime.create(ts2, flySwitch, tween, {
+			BackgroundColor3 = active and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(40, 40, 40)
+		}):Play()
+		AineRuntime.create(ts2, flyKnob, tween, {
+			Position = active and UDim2.new(1, -30, 0.5, 0) or UDim2.new(0, 4, 0.5, 0)
+		}):Play()
+		AineRuntime.create(ts2, flyLabel, tween, {
+			Position = active and UDim2.new(0, 6, 0.5, 0) or UDim2.new(0, 32, 0.5, 0)
+		}):Play()
+	end
+	local flySyncConnection = AineRuntime.connect(rs2.Heartbeat, function()
+		local active = flyUtility:IsFlying()
+		if active ~= flyShownActive then updateFlySwitch(active) end
+	end)
+	AineRuntime.connect(flySwitch.Destroying, function()
+		flySyncConnection:Disconnect()
+		flyUtility:Stop()
+	end)
+	AineRuntime.onClose(function() flyUtility:Stop() end)
+
 	local function getNotify()
 		local fu2 = (getgenv and getgenv().YARHMFUNCTIONS) or nil
 		return function(msg)
@@ -8677,7 +8711,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local farmCombat = {enabled = false, busy = false, generation = 0, phase = "start", nextAction = 0}
 	local function resetFarmCombat()
 		farmCombat.generation = farmCombat.generation + 1
-		farmCombat.phase, farmCombat.nextAction, farmCombat.target = "start", 0, nil
+		farmCombat.phase, farmCombat.nextAction, farmCombat.lobbyReady = "start", 0, false
 	end
 	local farmSession
 	local farmCooldown = setmetatable({}, {__mode = "k"})
@@ -8699,6 +8733,10 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end
 
 	local function setFarmEnabled(enabled, combat)
+		if enabled and flyUtility:IsFlying() then
+			flyUtility:Stop()
+			updateFlySwitch(false)
+		end
 		resetFarmCombat()
 		farmEnabled = enabled
 		farmCombat.enabled = enabled and combat == true
@@ -8896,6 +8934,19 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end)
 
 
+	local lastFlyToggle = 0
+	AineRuntime.connect(flySwitch.Activated, function()
+		if tick() - lastFlyToggle < 0.25 then return end
+		lastFlyToggle = tick()
+		if flyUtility:IsFlying() then
+			flyUtility:Stop()
+		else
+			if farmEnabled then setFarmEnabled(false) end
+			flyUtility:Start()
+		end
+		updateFlySwitch(flyUtility:IsFlying())
+	end)
+
 	local function makeTeleportButton(name, label, rightOffset)
 		local button = AineRuntime.clone(antiFlingSwitch)
 		button.Name = name
@@ -8919,7 +8970,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	local mapTeleportBtn, mapTeleportScale = makeTeleportButton("MapTeleportQuickBtn", "MAP", -110)
 	local lobbyTeleportBtn, lobbyTeleportScale = makeTeleportButton("LobbyTeleportQuickBtn", "LOBBY", -200)
 	local lastQuickTeleport = 0
-	local function teleportToSpawns(toLobby)
+	local function teleportToSpawns(toLobby, keepFarm)
 		if tick() - lastQuickTeleport < 0.5 then return end
 		lastQuickTeleport = tick()
 		local notify = getNotify()
@@ -8947,13 +8998,14 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			notify(toLobby and "No lobby spawn found." or "No active map spawn found.")
 			return
 		end
-		if farmEnabled then setFarmEnabled(false) end
+		if farmEnabled and not keepFarm then setFarmEnabled(false) end
 		farmPauseUntil = tick() + 2
 		local spawn = spawns[math.random(1, #spawns)]
 		local target = spawn.CFrame + Vector3.new(0, spawn.Size.Y / 2 + hum.HipHeight + root.Size.Y / 2 + 0.5, 0)
 		char:PivotTo(target * root.CFrame:ToObjectSpace(char:GetPivot()))
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
+		return true
 	end
 	AineRuntime.connect(mapTeleportBtn.Activated, function() teleportToSpawns(false) end)
 	AineRuntime.connect(lobbyTeleportBtn.Activated, function() teleportToSpawns(true) end)
@@ -9336,6 +9388,14 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		task.spawn(function()
 			local ok, err = pcall(function()
 				if not farmCombatActive(generation, character) then return end
+				if not farmCombat.lobbyReady then
+					local arrived = teleportToSpawns(true, true)
+					if farmCombatActive(generation, character) then
+						farmCombat.lobbyReady = arrived == true
+						farmCombat.nextAction = tick() + (arrived and 0.3 or 2)
+					end
+					return
+				end
 				local lp = game.Players.LocalPlayer
 				local murderer = findRole("Knife", "YARHM_findMurderer")
 				if farmHasTool("Knife") or murderer == lp then
@@ -9347,19 +9407,10 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 					farmCombat.nextAction = tick() + 0.5
 					return
 				end
-				if farmCombat.phase == "shot" then
-					if farmCombat.target == murderer then
-						runFling(false, false)
-					end
-					if farmCombatActive(generation, character) then
-						farmCombat.phase, farmCombat.nextAction = "start", tick() + 3
-					end
-					return
-				end
 				if farmHasTool("Gun") then
 					onShootClick(true)
 					if farmCombatActive(generation, character) then
-						farmCombat.phase, farmCombat.target = "shot", murderer
+						farmCombat.phase = "start"
 						farmCombat.nextAction = tick() + 1.2
 					end
 					return
@@ -9537,6 +9588,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 				{btn = flingBtn, sc = flingScale},
 				{btn = killAllBtn, sc = killAllScale},
 				{btn = noclipSwitch, sc = noclipScale},
+				{btn = flySwitch, sc = flyScale},
 				{btn = farmSwitch, sc = farmScale},
 				{btn = antiFlingSwitch, sc = antiFlingScale},
 				{btn = mapTeleportBtn, sc = mapTeleportScale},
