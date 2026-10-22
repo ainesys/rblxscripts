@@ -1,0 +1,383 @@
+-- General mobile controls. Run on the client.
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local previous = playerGui:FindFirstChild("AineGeneral")
+if previous then
+	local shutdown = previous:FindFirstChild("Shutdown")
+	if shutdown and shutdown:IsA("BindableFunction") then shutdown:Invoke() else previous:Destroy() end
+end
+
+local connections, collisionState, espObjects = {}, {}, {}
+local closed, minimized = false, false
+local antiFling, noclip, esp = false, false, false
+local burst, nextBurst, espElapsed = nil, 0, 0
+local tpRow, flingRow
+local function connect(signal, callback)
+	local connection = signal:Connect(callback)
+	table.insert(connections, connection)
+	return connection
+end
+local function make(class, properties, parent)
+	local object = Instance.new(class)
+	for key, value in pairs(properties) do object[key] = value end
+	object.Parent = parent
+	return object
+end
+local colors = {
+	panel = Color3.fromRGB(21, 26, 36), field = Color3.fromRGB(32, 39, 52),
+	text = Color3.fromRGB(239, 244, 255), muted = Color3.fromRGB(167, 181, 201),
+	accent = Color3.fromRGB(65, 210, 162), off = Color3.fromRGB(62, 71, 88),
+}
+local function round(object, radius)
+	make("UICorner", {CornerRadius = UDim.new(0, radius or 12)}, object)
+end
+local function label(parent, text, position, size, fontSize)
+	return make("TextLabel", {
+		BackgroundTransparency = 1, Text = text, Position = position, Size = size,
+		Font = Enum.Font.GothamMedium, TextSize = fontSize or 14,
+		TextColor3 = colors.text, TextXAlignment = Enum.TextXAlignment.Left,
+	}, parent)
+end
+local gui = make("ScreenGui", {
+	Name = "AineGeneral", ResetOnSpawn = false, IgnoreGuiInset = false,
+	DisplayOrder = 1000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, playerGui)
+local shutdown = make("BindableFunction", {Name = "Shutdown"}, gui)
+local surface = make("Frame", {
+	Name = "SafeArea", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
+}, gui)
+local title = label(surface, "AINE / GENERAL", UDim2.fromOffset(12, 10), UDim2.new(1, -132, 0, 38), 15)
+local function button(parent, text, position, size)
+	local result = make("TextButton", {
+		Text = text, Position = position, Size = size, BackgroundColor3 = colors.panel,
+		BorderSizePixel = 0, TextColor3 = colors.text, Font = Enum.Font.GothamBold,
+		TextSize = 14, AutoButtonColor = true,
+	}, parent)
+	round(result)
+	return result
+end
+local minimize = button(surface, "Hide", UDim2.new(1, -116, 0, 8), UDim2.fromOffset(56, 44))
+local close = button(surface, "X", UDim2.new(1, -54, 0, 8), UDim2.fromOffset(44, 44))
+local left = make("Frame", {
+	Name = "Targets", BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 62),
+	Size = UDim2.fromOffset(300, 222),
+}, surface)
+local right = make("Frame", {
+	Name = "QuickToggles", BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -12, 0, 62), Size = UDim2.fromOffset(124, 168),
+}, surface)
+local function paintToggle(toggle, enabled)
+	toggle.Text = enabled and "ON" or "OFF"
+	toggle.BackgroundColor3 = enabled and colors.accent or colors.off
+	toggle.TextColor3 = enabled and colors.panel or colors.text
+end
+local function targetRow(name, y)
+	local card = make("Frame", {
+		Name = name, BackgroundColor3 = colors.panel, BorderSizePixel = 0,
+		Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 108),
+	}, left)
+	round(card)
+	label(card, name, UDim2.fromOffset(12, 6), UDim2.new(1, -24, 0, 22), 14)
+	local input = make("TextBox", {
+		Name = "Target", BackgroundColor3 = colors.field, BorderSizePixel = 0,
+		Position = UDim2.fromOffset(10, 32), Size = UDim2.new(1, -84, 0, 44),
+		Text = "", PlaceholderText = "Name / @username", ClearTextOnFocus = false,
+		Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = colors.text,
+		PlaceholderColor3 = colors.muted, TextXAlignment = Enum.TextXAlignment.Left,
+	}, card)
+	make("UIPadding", {PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, input)
+	round(input, 8)
+	local toggle = button(card, "OFF", UDim2.new(1, -66, 0, 32), UDim2.fromOffset(56, 44))
+	paintToggle(toggle, false)
+	local status = label(card, "Enter a player name", UDim2.fromOffset(12, 80), UDim2.new(1, -24, 0, 20), 11)
+	status.TextColor3 = colors.muted
+	status.TextTruncate = Enum.TextTruncate.AtEnd
+	return {input = input, toggle = toggle, status = status, enabled = false, target = nil}
+end
+tpRow = targetRow("Loop TP", 0)
+flingRow = targetRow("Loop Fling", 116)
+local function quickToggle(text, y, callback)
+	local control = button(right, text .. "  OFF", UDim2.fromOffset(0, y), UDim2.fromOffset(124, 48))
+	local function update(enabled)
+		control.Text = text .. (enabled and "  ON" or "  OFF")
+		control.BackgroundColor3 = enabled and colors.accent or colors.panel
+		control.TextColor3 = enabled and colors.panel or colors.text
+	end
+	connect(control.Activated, function() callback(update) end)
+	return control
+end
+
+local function resolve(text)
+	local query = text:match("^%s*(.-)%s*$"):gsub("^@", ""):lower()
+	if query == "" then return nil, "Enter a player name" end
+	local displayMatches, prefixMatches = {}, {}
+	for _, candidate in ipairs(Players:GetPlayers()) do
+		if candidate ~= player then
+			local username, display = candidate.Name:lower(), candidate.DisplayName:lower()
+			if username == query then return candidate end
+			if display == query then table.insert(displayMatches, candidate) end
+			if username:sub(1, #query) == query or display:sub(1, #query) == query then
+				table.insert(prefixMatches, candidate)
+			end
+		end
+	end
+	local matches = #displayMatches > 0 and displayMatches or prefixMatches
+	if #matches == 1 then return matches[1] end
+	return nil, #matches > 1 and "Multiple matches; use @username" or "Player not found"
+end
+local function characterParts(who)
+	local character = who.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if humanoid and root and humanoid.Health > 0 then return character, humanoid, root end
+end
+local function stopMotion(root)
+	if root and root.Parent then
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	end
+end
+local function restoreCollisions()
+	for part, saved in pairs(collisionState) do
+		if part.Parent then part.CanCollide = saved end
+	end
+	table.clear(collisionState)
+end
+local function finishBurst()
+	local active = burst
+	if not active then return end
+	burst = nil
+	if active.force then active.force:Destroy() end
+	if active.humanoid.Parent then
+		active.humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, active.seated)
+		active.humanoid.AutoRotate = active.autoRotate
+	end
+	if player.Character == active.character and active.root.Parent then
+		active.root.CFrame = active.origin
+		stopMotion(active.root)
+		if active.humanoid.Health > 0 then active.humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end
+	end
+	nextBurst = os.clock() + 0.35
+end
+local function setRow(row, enabled)
+	if row == flingRow then finishBurst() end
+	row.enabled = false
+	row.target = nil
+	if enabled then
+		local target, message = resolve(row.input.Text)
+		row.target = target
+		row.enabled = target ~= nil
+		row.status.Text = target and (target.DisplayName .. "(@" .. target.Name .. ")") or message
+	else
+		row.status.Text = "Stopped"
+	end
+	paintToggle(row.toggle, row.enabled)
+end
+for _, row in ipairs({tpRow, flingRow}) do
+	connect(row.toggle.Activated, function() setRow(row, not row.enabled) end)
+	connect(row.input:GetPropertyChangedSignal("Text"), function()
+		if row.enabled then setRow(row, false) end
+		row.status.Text = "Tap OFF to start"
+	end)
+end
+quickToggle("Anti Fling", 0, function(update)
+	antiFling = not antiFling
+	update(antiFling)
+end)
+quickToggle("Noclip", 58, function(update)
+	noclip = not noclip
+	if not noclip then restoreCollisions() end
+	update(noclip)
+end)
+
+local function removeESP(who)
+	local objects = espObjects[who]
+	if objects then
+		objects.billboard:Destroy()
+		for _, edge in ipairs(objects.edges) do edge:Destroy() end
+		espObjects[who] = nil
+	end
+end
+local function clearESP()
+	for who in pairs(espObjects) do removeESP(who) end
+end
+quickToggle("ESP", 116, function(update)
+	esp = not esp
+	if not esp then clearESP() end
+	espElapsed = 0.1
+	update(esp)
+end)
+local function updateESP()
+	for _, who in ipairs(Players:GetPlayers()) do
+		if who ~= player then
+			local character, _, root = characterParts(who)
+			local objects = espObjects[who]
+			if not character then
+				removeESP(who)
+			else
+				if objects and objects.character ~= character then removeESP(who); objects = nil end
+				if not objects then
+					local billboard = make("BillboardGui", {
+						Name = "PlayerNameESP", Adornee = root, AlwaysOnTop = true,
+						Size = UDim2.fromOffset(280, 28),
+					}, gui)
+					local name = label(billboard, "", UDim2.fromOffset(0, 0), UDim2.fromScale(1, 1), 14)
+					name.TextXAlignment = Enum.TextXAlignment.Center
+					name.TextStrokeTransparency = 0.2
+					name.TextStrokeColor3 = Color3.new(0, 0, 0)
+					local edges = {}
+					for index = 1, 12 do
+						edges[index] = make("BoxHandleAdornment", {
+							Name = "PlayerBoxEdge", Adornee = root, AlwaysOnTop = true,
+							ZIndex = 1, Color3 = colors.accent, Transparency = 0.1,
+						}, gui)
+					end
+					objects = {character = character, billboard = billboard, name = name, edges = edges}
+					espObjects[who] = objects
+				end
+				local bounds, size = character:GetBoundingBox()
+				local relative = root.CFrame:ToObjectSpace(bounds)
+				local edgeIndex = 0
+				for _, a in ipairs({-1, 1}) do
+					for _, b in ipairs({-1, 1}) do
+						for axis = 1, 3 do
+							edgeIndex = edgeIndex + 1
+							local edge = objects.edges[edgeIndex]
+							local offset = axis == 1 and Vector3.new(0, a * size.Y / 2, b * size.Z / 2)
+								or axis == 2 and Vector3.new(a * size.X / 2, 0, b * size.Z / 2)
+								or Vector3.new(a * size.X / 2, b * size.Y / 2, 0)
+							edge.Adornee = root
+							edge.Size = axis == 1 and Vector3.new(size.X, 0.035, 0.035)
+								or axis == 2 and Vector3.new(0.035, size.Y, 0.035)
+								or Vector3.new(0.035, 0.035, size.Z)
+							edge.CFrame = relative * CFrame.new(offset)
+						end
+					end
+				end
+				objects.billboard.Adornee = root
+				objects.billboard.StudsOffsetWorldSpace = Vector3.new(0, bounds.Position.Y - root.Position.Y + size.Y / 2 + 0.7, 0)
+				objects.name.Text = who.DisplayName .. "(@" .. who.Name .. ")"
+			end
+		end
+	end
+end
+
+local function startBurst(target, character, humanoid, root)
+	restoreCollisions()
+	burst = {
+		target = target, targetCharacter = target.Character, character = character,
+		humanoid = humanoid, root = root, origin = root.CFrame, started = os.clock(),
+		seated = humanoid:GetStateEnabled(Enum.HumanoidStateType.Seated), autoRotate = humanoid.AutoRotate,
+	}
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+	humanoid.Sit = false
+	humanoid.AutoRotate = false
+	burst.force = make("BodyVelocity", {
+		Name = "GeneralFlingVelocity", Velocity = Vector3.new(9e8, 9e8, 9e8),
+		MaxForce = Vector3.new(math.huge, math.huge, math.huge), P = 1250,
+	}, root)
+end
+local function physicsStep()
+	local character, humanoid, root = characterParts(player)
+	if burst then
+		local _, targetHumanoid, targetRoot = characterParts(burst.target)
+		if not flingRow.enabled or not root or root ~= burst.root or not targetRoot
+			or burst.target.Parent ~= Players or burst.target.Character ~= burst.targetCharacter
+			or targetHumanoid.Sit or os.clock() - burst.started >= 2 then
+			finishBurst()
+		else
+			local elapsed = os.clock() - burst.started
+			local phase = math.floor(elapsed * 60)
+			local offset = Vector3.new(phase % 3 - 1, phase % 2 == 0 and 1.5 or -1.5, 0)
+			local lead = targetRoot.AssemblyLinearVelocity * 0.08
+			if lead.Magnitude > 8 then lead = lead.Unit * 8 end
+			root.CFrame = CFrame.new(targetRoot.Position + offset + lead) * CFrame.Angles(math.rad(phase * 100), 0, 0)
+			root.AssemblyLinearVelocity = Vector3.new(9e7, 9e8, 9e7)
+			root.AssemblyAngularVelocity = Vector3.new(9e8, 9e8, 9e8)
+		end
+	end
+	if not root or burst then return end
+	if flingRow.enabled and os.clock() >= nextBurst and not UserInputService:GetFocusedTextBox() then
+		local _, targetHumanoid, targetRoot = characterParts(flingRow.target)
+		if targetRoot and not targetHumanoid.Sit then
+			startBurst(flingRow.target, character, humanoid, root)
+			return
+		end
+	end
+	if noclip then
+		for _, part in ipairs(character:GetDescendants()) do
+			if part:IsA("BasePart") then
+				if collisionState[part] == nil then collisionState[part] = part.CanCollide end
+				part.CanCollide = false
+			end
+		end
+	end
+	if antiFling then
+		if root.AssemblyLinearVelocity.Magnitude > 500 then root.AssemblyLinearVelocity = Vector3.zero end
+		if root.AssemblyAngularVelocity.Magnitude > 500 then root.AssemblyAngularVelocity = Vector3.zero end
+	end
+	if tpRow.enabled and not UserInputService:GetFocusedTextBox() then
+		local _, _, targetRoot = characterParts(tpRow.target)
+		if targetRoot then
+			root.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 3)
+			stopMotion(root)
+		end
+	end
+end
+
+local function cleanup()
+	if closed then return end
+	closed = true
+	for _, connection in ipairs(connections) do connection:Disconnect() end
+	finishBurst()
+	restoreCollisions()
+	clearESP()
+	gui:Destroy()
+end
+shutdown.OnInvoke = cleanup
+connect(close.Activated, cleanup)
+connect(gui.Destroying, cleanup)
+connect(minimize.Activated, function()
+	minimized = not minimized
+	left.Visible = not minimized
+	right.Visible = not minimized
+	minimize.Text = minimized and "Show" or "Hide"
+end)
+local function layout()
+	local width = surface.AbsoluteSize.X
+	left.Size = UDim2.fromOffset(math.min(330, math.max(150, width - 160)), 224)
+end
+connect(surface:GetPropertyChangedSignal("AbsoluteSize"), layout)
+layout()
+connect(Players.PlayerRemoving, function(who)
+	removeESP(who)
+	for _, row in ipairs({tpRow, flingRow}) do
+		if row.target == who then setRow(row, false); row.status.Text = "Player left the server" end
+	end
+end)
+connect(player.CharacterRemoving, function()
+	finishBurst()
+	restoreCollisions()
+end)
+connect(RunService.Stepped, function()
+	if closed then return end
+	local ok, message = pcall(physicsStep)
+	if not ok then
+		finishBurst()
+		setRow(flingRow, false)
+		setRow(tpRow, false)
+		warn("General controls: " .. tostring(message))
+	end
+end)
+connect(RunService.Heartbeat, function(dt)
+	if closed or not esp then return end
+	espElapsed = espElapsed + dt
+	if espElapsed < 0.1 then return end
+	espElapsed = 0
+	updateESP()
+end)
