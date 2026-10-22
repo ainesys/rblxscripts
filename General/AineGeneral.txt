@@ -15,6 +15,7 @@ end
 local connections, collisionState, espObjects = {}, {}, {}
 local closed, minimized = false, false
 local antiFling, noclip, esp = false, false, false
+local fly, flight = false, nil
 local burst, nextBurst, espElapsed = nil, 0, 0
 local tpRow, flingRow
 local function connect(signal, callback)
@@ -105,8 +106,8 @@ local function targetRow(name, y)
 end
 tpRow = targetRow("Loop TP", 0)
 flingRow = targetRow("Loop Fling", 70)
-local function quickToggle(text, y, callback, isMapButton)
-	local control = button(right, "", UDim2.fromOffset(isMapButton and 0 or 90, y), UDim2.fromOffset(80, 34))
+local function quickToggle(text, y, callback, isMapButton, xOffset)
+	local control = button(right, "", UDim2.fromOffset(xOffset or (isMapButton and 0 or 90), y), UDim2.fromOffset(80, 34))
 	control.Name = text == "Anti Fling" and "AntiFlingQuickSwitch" or text .. "QuickSwitch"
 	control.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 	control.AutoButtonColor = false
@@ -176,6 +177,56 @@ local function stopMotion(root)
 		root.AssemblyAngularVelocity = Vector3.zero
 	end
 end
+local function stopFlight()
+	local active = flight
+	if not active then return end
+	flight = nil
+	active.velocity:Destroy()
+	active.gyro:Destroy()
+	if active.humanoid.Parent then
+		active.humanoid.PlatformStand = active.platformStand
+		active.humanoid.AutoRotate = active.autoRotate
+		if player.Character == active.character and active.humanoid.Health > 0 and not active.platformStand then
+			active.humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end
+	end
+	stopMotion(active.root)
+end
+local function updateFlight(character, humanoid, root)
+	local camera = workspace.CurrentCamera
+	if not camera then stopFlight(); return end
+	if flight and flight.root ~= root then stopFlight() end
+	if not flight then
+		flight = {
+			character = character, humanoid = humanoid, root = root,
+			platformStand = humanoid.PlatformStand, autoRotate = humanoid.AutoRotate,
+			velocity = make("BodyVelocity", {
+				Name = "GeneralFlyVelocity", P = 10000, Velocity = Vector3.zero,
+				MaxForce = Vector3.new(math.huge, math.huge, math.huge),
+			}, root),
+			gyro = make("BodyGyro", {
+				Name = "GeneralFlyGyro", P = 100000, CFrame = root.CFrame,
+				MaxTorque = Vector3.new(math.huge, math.huge, math.huge),
+			}, root),
+		}
+	end
+	humanoid.PlatformStand = true
+	humanoid.AutoRotate = false
+	local movement = UserInputService:GetFocusedTextBox() and Vector3.zero or humanoid.MoveDirection
+	local look = camera.CFrame.LookVector
+	local forward = Vector3.new(look.X, 0, look.Z)
+	if forward.Magnitude < 0.001 then
+		local facing = root.CFrame.LookVector
+		forward = Vector3.new(facing.X, 0, facing.Z)
+	end
+	if forward.Magnitude < 0.001 then forward = Vector3.new(0, 0, -1) end
+	forward = forward.Unit
+	local amount = movement:Dot(forward)
+	local direction = movement - forward * amount + look * amount
+	if direction.Magnitude > 1 then direction = direction.Unit end
+	flight.velocity.Velocity = direction * 50
+	flight.gyro.CFrame = camera.CFrame
+end
 local function restoreCollisions()
 	for part, saved in pairs(collisionState) do
 		if part.Parent then part.CanCollide = saved end
@@ -228,6 +279,11 @@ quickToggle("Noclip", 42, function(update)
 	if not noclip then restoreCollisions() end
 	update(noclip)
 end)
+quickToggle("Fly", 42, function(update)
+	fly = not fly
+	if not fly then stopFlight() end
+	update(fly)
+end, false, 0)
 
 local function removeESP(who)
 	local objects = espObjects[who]
@@ -302,6 +358,7 @@ local function updateESP()
 end
 
 local function startBurst(target, character, humanoid, root)
+	stopFlight()
 	restoreCollisions()
 	burst = {
 		target = target, targetCharacter = target.Character, character = character,
@@ -335,7 +392,8 @@ local function physicsStep()
 			root.AssemblyAngularVelocity = Vector3.new(9e8, 9e8, 9e8)
 		end
 	end
-	if not root or burst then return end
+	if not root then stopFlight(); return end
+	if burst then return end
 	if flingRow.enabled and os.clock() >= nextBurst and not UserInputService:GetFocusedTextBox() then
 		local _, targetHumanoid, targetRoot = characterParts(flingRow.target)
 		if targetRoot and not targetHumanoid.Sit then
@@ -355,6 +413,7 @@ local function physicsStep()
 		if root.AssemblyLinearVelocity.Magnitude > 500 then root.AssemblyLinearVelocity = Vector3.zero end
 		if root.AssemblyAngularVelocity.Magnitude > 500 then root.AssemblyAngularVelocity = Vector3.zero end
 	end
+	if fly and not tpRow.enabled then updateFlight(character, humanoid, root) else stopFlight() end
 	if tpRow.enabled and not UserInputService:GetFocusedTextBox() then
 		local _, _, targetRoot = characterParts(tpRow.target)
 		if targetRoot then
@@ -369,6 +428,7 @@ local function cleanup()
 	closed = true
 	for _, connection in ipairs(connections) do connection:Disconnect() end
 	finishBurst()
+	stopFlight()
 	restoreCollisions()
 	clearESP()
 	gui:Destroy()
@@ -385,6 +445,7 @@ end)
 local function layout()
 	local width = surface.AbsoluteSize.X
 	left.Size = UDim2.fromOffset(math.min(210, math.max(140, width - 140)), 134)
+	left.Position = UDim2.fromOffset(20, width < 440 and 144 or 60)
 end
 connect(surface:GetPropertyChangedSignal("AbsoluteSize"), layout)
 layout()
@@ -396,6 +457,7 @@ connect(Players.PlayerRemoving, function(who)
 end)
 connect(player.CharacterRemoving, function()
 	finishBurst()
+	stopFlight()
 	restoreCollisions()
 end)
 connect(RunService.Stepped, function()
