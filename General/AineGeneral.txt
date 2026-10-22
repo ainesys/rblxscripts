@@ -51,7 +51,6 @@ local shutdown = make("BindableFunction", {Name = "Shutdown"}, gui)
 local surface = make("Frame", {
 	Name = "SafeArea", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
 }, gui)
-local title = label(surface, "AINE / GENERAL", UDim2.fromOffset(12, 10), UDim2.new(1, -132, 0, 38), 15)
 local function button(parent, text, position, size)
 	local result = make("TextButton", {
 		Text = text, Position = position, Size = size, BackgroundColor3 = colors.panel,
@@ -61,15 +60,17 @@ local function button(parent, text, position, size)
 	round(result)
 	return result
 end
-local minimize = button(surface, "Hide", UDim2.new(1, -116, 0, 8), UDim2.fromOffset(56, 44))
-local close = button(surface, "X", UDim2.new(1, -54, 0, 8), UDim2.fromOffset(44, 44))
+local minimize = button(surface, "Hide", UDim2.new(1, -100, 0, 102), UDim2.fromOffset(44, 26))
+local close = button(surface, "X", UDim2.new(1, -50, 0, 102), UDim2.fromOffset(30, 26))
+minimize.TextSize = 11
+close.TextSize = 11
 local left = make("Frame", {
-	Name = "Targets", BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 62),
-	Size = UDim2.fromOffset(300, 222),
+	Name = "Targets", BackgroundTransparency = 1, Position = UDim2.fromOffset(20, 60),
+	Size = UDim2.fromOffset(210, 134),
 }, surface)
 local right = make("Frame", {
 	Name = "QuickToggles", BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -12, 0, 62), Size = UDim2.fromOffset(124, 168),
+	Position = UDim2.new(1, -20, 0, 18), Size = UDim2.fromOffset(170, 76),
 }, surface)
 local function paintToggle(toggle, enabled)
 	toggle.Text = enabled and "ON" or "OFF"
@@ -78,35 +79,68 @@ local function paintToggle(toggle, enabled)
 end
 local function targetRow(name, y)
 	local card = make("Frame", {
-		Name = name, BackgroundColor3 = colors.panel, BorderSizePixel = 0,
-		Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 108),
+		Name = name, BackgroundTransparency = 1, BorderSizePixel = 0,
+		Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 64),
 	}, left)
 	round(card)
-	label(card, name, UDim2.fromOffset(12, 6), UDim2.new(1, -24, 0, 22), 14)
+	local heading = label(card, name, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 16), 11)
+	heading.TextStrokeTransparency = 0.25
 	local input = make("TextBox", {
-		Name = "Target", BackgroundColor3 = colors.field, BorderSizePixel = 0,
-		Position = UDim2.fromOffset(10, 32), Size = UDim2.new(1, -84, 0, 44),
+		Name = "Target", BackgroundColor3 = Color3.fromRGB(40, 40, 40), BorderSizePixel = 0,
+		Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, -50, 0, 32),
 		Text = "", PlaceholderText = "Name / @username", ClearTextOnFocus = false,
-		Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = colors.text,
+		Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = colors.text,
 		PlaceholderColor3 = colors.muted, TextXAlignment = Enum.TextXAlignment.Left,
 	}, card)
 	make("UIPadding", {PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, input)
 	round(input, 8)
-	local toggle = button(card, "OFF", UDim2.new(1, -66, 0, 32), UDim2.fromOffset(56, 44))
+	local toggle = button(card, "OFF", UDim2.new(1, -44, 0, 18), UDim2.fromOffset(44, 32))
+	toggle.TextSize = 11
 	paintToggle(toggle, false)
-	local status = label(card, "Enter a player name", UDim2.fromOffset(12, 80), UDim2.new(1, -24, 0, 20), 11)
+	local status = label(card, "", UDim2.fromOffset(0, 51), UDim2.new(1, 0, 0, 13), 10)
 	status.TextColor3 = colors.muted
+	status.TextStrokeTransparency = 0.2
 	status.TextTruncate = Enum.TextTruncate.AtEnd
 	return {input = input, toggle = toggle, status = status, enabled = false, target = nil}
 end
 tpRow = targetRow("Loop TP", 0)
-flingRow = targetRow("Loop Fling", 116)
-local function quickToggle(text, y, callback)
-	local control = button(right, text .. "  OFF", UDim2.fromOffset(0, y), UDim2.fromOffset(124, 48))
+flingRow = targetRow("Loop Fling", 70)
+local function quickToggle(text, y, callback, isMapButton)
+	local control = button(right, "", UDim2.fromOffset(isMapButton and 0 or 90, y), UDim2.fromOffset(80, 34))
+	control.Name = text == "Anti Fling" and "AntiFlingQuickSwitch" or text .. "QuickSwitch"
+	control.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	control.AutoButtonColor = false
+	control:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(1, 0)
+	make("UIStroke", {
+		Color = Color3.new(1, 1, 1), ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Thickness = 2,
+	}, control)
+	local caption = label(control, text == "Anti Fling" and "A.FLING" or text:upper(),
+		UDim2.new(0, 32, 0.5, 0), UDim2.new(0, 44, 0.65, 0), 13)
+	caption.AnchorPoint = Vector2.new(0, 0.5)
+	caption.Font = Enum.Font.GothamBold
+	caption.TextScaled = true
+	caption.TextColor3 = Color3.new(1, 1, 1)
+	local knob
+	if isMapButton then
+		caption.Position = UDim2.fromScale(0, 0)
+		caption.AnchorPoint = Vector2.new(0, 0)
+		caption.Size = UDim2.fromScale(1, 1)
+		caption.TextScaled = false
+		caption.TextXAlignment = Enum.TextXAlignment.Center
+	else
+		knob = make("Frame", {
+			Name = "Knob", BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+			AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 4, 0.5, 0),
+			Size = UDim2.fromOffset(26, 26),
+		}, control)
+		make("UICorner", {CornerRadius = UDim.new(1, 0)}, knob)
+	end
 	local function update(enabled)
-		control.Text = text .. (enabled and "  ON" or "  OFF")
-		control.BackgroundColor3 = enabled and colors.accent or colors.panel
-		control.TextColor3 = enabled and colors.panel or colors.text
+		control.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(40, 40, 40)
+		if knob then
+			knob.Position = enabled and UDim2.new(1, -30, 0.5, 0) or UDim2.new(0, 4, 0.5, 0)
+			caption.Position = enabled and UDim2.new(0, 6, 0.5, 0) or UDim2.new(0, 32, 0.5, 0)
+		end
 	end
 	connect(control.Activated, function() callback(update) end)
 	return control
@@ -189,7 +223,7 @@ quickToggle("Anti Fling", 0, function(update)
 	antiFling = not antiFling
 	update(antiFling)
 end)
-quickToggle("Noclip", 58, function(update)
+quickToggle("Noclip", 42, function(update)
 	noclip = not noclip
 	if not noclip then restoreCollisions() end
 	update(noclip)
@@ -206,12 +240,12 @@ end
 local function clearESP()
 	for who in pairs(espObjects) do removeESP(who) end
 end
-quickToggle("ESP", 116, function(update)
+quickToggle("ESP", 0, function(update)
 	esp = not esp
 	if not esp then clearESP() end
 	espElapsed = 0.1
 	update(esp)
-end)
+end, true)
 local function updateESP()
 	for _, who in ipairs(Players:GetPlayers()) do
 		if who ~= player then
@@ -350,7 +384,7 @@ connect(minimize.Activated, function()
 end)
 local function layout()
 	local width = surface.AbsoluteSize.X
-	left.Size = UDim2.fromOffset(math.min(330, math.max(150, width - 160)), 224)
+	left.Size = UDim2.fromOffset(math.min(210, math.max(140, width - 140)), 134)
 end
 connect(surface:GetPropertyChangedSignal("AbsoluteSize"), layout)
 layout()
