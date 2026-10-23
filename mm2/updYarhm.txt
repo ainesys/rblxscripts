@@ -8719,7 +8719,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			destination = coinPosition
 		end
 		local delta = destination - root.Position
-		local step = 24 * math.min(dt, 0.1)
+		local step = 30 * math.min(dt, 0.1)
 		local nextPosition = delta.Magnitude > step and root.Position + delta.Unit * step or destination
 		local targetRoot = CFrame.new(nextPosition) * root.CFrame.Rotation
 		char:PivotTo(targetRoot * root.CFrame:ToObjectSpace(char:GetPivot()))
@@ -8730,7 +8730,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			if firetouchinterest and active then
 				pcall(function() firetouchinterest(root, session.part, 0) end)
 			end
-			session.untilTime = tick() + 1
+			session.untilTime = tick() + 0.6
 			session.phase = "wait"
 		elseif session.phase == "wait" then
 			if firetouchinterest and active then
