@@ -5729,10 +5729,22 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		local a=game.Players.LocalPlayer;local b=a:GetMouse()local c={playerToFling}local d=game:GetService("Players")local e=d.LocalPlayer;local f=false;local g=function(h)local i=e.Character;local j=i and i:FindFirstChildOfClass("Humanoid")local k=j and j.RootPart;local l=h.Character;local m;local n;local o;local p;local q;if l:FindFirstChildOfClass("Humanoid")then m=l:FindFirstChildOfClass("Humanoid")end;if m and m.RootPart then n=m.RootPart end;if l:FindFirstChild("Head")then o=l.Head end;if l:FindFirstChildOfClass("Accessory")then p=l:FindFirstChildOfClass("Accessory")end;if p and p:FindFirstChild("Handle")then q=p.Handle end;if i and j and k then if k.Velocity.Magnitude<50 then getgenv().OldPos=k.CFrame end;if m and m.Sit and not f then end;if o then if o.Velocity.Magnitude>500 then fu.dialog("Player flung","Player is already flung. Fling again?",{"Fling again","No"})if fu.waitfordialog()=="No"then return fu.closedialog()end;fu.closedialog()end elseif not o and q then if q.Velocity.Magnitude>500 then fu.dialog("Player flung","Player is already flung. Fling again?",{"Fling again","No"})if fu.waitfordialog()=="No"then return fu.closedialog()end;fu.closedialog()end end;if o then workspace.CurrentCamera.CameraSubject=o elseif not o and q then workspace.CurrentCamera.CameraSubject=q elseif m and n then workspace.CurrentCamera.CameraSubject=m end;if not l:FindFirstChildWhichIsA("BasePart")then return end;local r=function(s,t,u)k.CFrame=CFrame.new(s.Position)*t*u;i:SetPrimaryPartCFrame(CFrame.new(s.Position)*t*u)k.Velocity=Vector3.new(9e7,9e7*10,9e7)k.RotVelocity=Vector3.new(9e8,9e8,9e8)end;local v=function(s)local w=2;local x=tick()local y=0;repeat if k and m then if s.Velocity.Magnitude<50 then y=y+100;r(s,CFrame.new(0,1.5,0)+m.MoveDirection*s.Velocity.Magnitude/1.25,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(0,-1.5,0)+m.MoveDirection*s.Velocity.Magnitude/1.25,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(2.25,1.5,-2.25)+m.MoveDirection*s.Velocity.Magnitude/1.25,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(-2.25,-1.5,2.25)+m.MoveDirection*s.Velocity.Magnitude/1.25,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(0,1.5,0)+m.MoveDirection,CFrame.Angles(math.rad(y),0,0))task.wait()r(s,CFrame.new(0,-1.5,0)+m.MoveDirection,CFrame.Angles(math.rad(y),0,0))task.wait()else r(s,CFrame.new(0,1.5,m.WalkSpeed),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,-1.5,-m.WalkSpeed),CFrame.Angles(0,0,0))task.wait()r(s,CFrame.new(0,1.5,m.WalkSpeed),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,1.5,n.Velocity.Magnitude/1.25),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,-1.5,-n.Velocity.Magnitude/1.25),CFrame.Angles(0,0,0))task.wait()r(s,CFrame.new(0,1.5,n.Velocity.Magnitude/1.25),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,-1.5,0),CFrame.Angles(math.rad(90),0,0))task.wait()r(s,CFrame.new(0,-1.5,0),CFrame.Angles(0,0,0))task.wait()r(s,CFrame.new(0,-1.5,0),CFrame.Angles(math.rad(-90),0,0))task.wait()r(s,CFrame.new(0,-1.5,0),CFrame.Angles(0,0,0))task.wait()end else break end until s.Velocity.Magnitude>500 or s.Parent~=h.Character or h.Parent~=d or h.Character~=l or m.Sit or j.Health<=0 or tick()>x+w end;workspace.FallenPartsDestroyHeight=0/0;local z=Instance.new("BodyVelocity")z.Name="EpixVel"z.Parent=k;z.Velocity=Vector3.new(9e8,9e8,9e8)z.MaxForce=Vector3.new(1/0,1/0,1/0)j:SetStateEnabled(Enum.HumanoidStateType.Seated,false)if n and o then if(n.CFrame.p-o.CFrame.p).Magnitude>5 then v(o)else v(n)end elseif n and not o then v(n)elseif not n and o then v(o)elseif not n and not o and p and q then v(q)else fu.notification("Can't find a proper part of target player to fling.")end;z:Destroy()j:SetStateEnabled(Enum.HumanoidStateType.Seated,true)workspace.CurrentCamera.CameraSubject=j;repeat k.CFrame=getgenv().OldPos*CFrame.new(0,.5,0)i:SetPrimaryPartCFrame(getgenv().OldPos*CFrame.new(0,.5,0))j:ChangeState("GettingUp")table.foreach(i:GetChildren(),function(A,B)if B:IsA("BasePart")then B.Velocity,B.RotVelocity=Vector3.new(),Vector3.new()end end)task.wait()until(k.Position-getgenv().OldPos.p).Magnitude<25;workspace.FallenPartsDestroyHeight=getgenv().FPDH else fu.notification("No valid character of said target player. May have died.")end end;g(c[1])
 	end
 	
+	local function getCoinContainer(map)
+		return map and (map:FindFirstChild("CoinContainer", true)
+			or map:FindFirstChild("CoinVisuals", true) or map:FindFirstChild("Coins", true))
+	end
+	local cachedMap, cachedCoinContainer
 	function getMap()
+		if cachedMap and cachedMap.Parent == workspace and cachedCoinContainer
+			and cachedCoinContainer:IsDescendantOf(cachedMap) then return cachedMap end
+		cachedMap, cachedCoinContainer = nil, nil
 		for _, o in ipairs(workspace:GetChildren()) do
-			if o:FindFirstChild("CoinContainer") and o:FindFirstChild("Spawns") then
-				return o
+			if o.Name ~= "Lobby" and (o:IsA("Model") or o:IsA("Folder")) then
+				local container = getCoinContainer(o)
+				if container then
+					cachedMap, cachedCoinContainer = o, container
+					return o
+				end
 			end
 		end
 		return nil
@@ -5745,11 +5757,25 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 		getgenv().YARHM_miniFling = miniFling
 		getgenv().YARHM_setLegacyCoinCollect = function(enabled) coinAutoCollect = enabled end
 		getgenv().YARHM_getMap = getMap
+		getgenv().YARHM_getCoinContainer = getCoinContainer
+		local standardRoles = {Innocent = true, Sheriff = true, Hero = true, Murderer = true}
+		local inactiveRoles = {[""] = true, lobby = true, spectator = true, spectating = true, waiting = true, none = true}
+		getgenv().YARHM_isStandardRound = function()
+			local found = false
+			for _, data in pairs(playerData) do
+				if data.Dead ~= true and data.Killed ~= true and type(data.Role) == "string"
+					and not inactiveRoles[string.lower(data.Role)] then
+					if not standardRoles[data.Role] then return false end
+					found = true
+				end
+			end
+			return found
+		end
 		getgenv().YARHM_isAliveInRound = function(player)
 			local data = playerData and playerData[player.Name]
 			if not data or data.Dead == true or data.Killed == true then return false end
-			if data.Role ~= "Innocent" and data.Role ~= "Sheriff" and data.Role ~= "Hero"
-				and data.Role ~= "Murderer" then return false end
+			local role = type(data.Role) == "string" and string.lower(data.Role)
+			if not role or inactiveRoles[role] then return false end
 			local character = player.Character
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			return player.Parent == game.Players and character ~= nil
@@ -8622,7 +8648,8 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			return
 		end
 		if flingBusy or tick() < farmPauseUntil then releaseFarm(false); return end
-		local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("CoinVisuals") or map:FindFirstChild("Coins")
+		local container = env.YARHM_getCoinContainer and env.YARHM_getCoinContainer(map)
+			or map:FindFirstChild("CoinContainer", true) or map:FindFirstChild("CoinVisuals", true) or map:FindFirstChild("Coins", true)
 		if not container then releaseFarm(true); return end
 		if farmSession and (farmSession.character ~= char or farmSession.map ~= map) then releaseFarm(true) end
 		local session = farmSession
@@ -9154,7 +9181,9 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		local char = lp.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		local alive = getgenv and getgenv().YARHM_isAliveInRound
+		local standardRound = getgenv and getgenv().YARHM_isStandardRound
 		return farmEnabled and farmCombat.enabled and farmBagFull and not farmRoundEnded
+			and standardRound and standardRound()
 			and (generation == nil or generation == farmCombat.generation)
 			and (character == nil or character == char)
 			and hum and hum.Health > 0 and char:FindFirstChild("HumanoidRootPart") and alive and alive(lp)
