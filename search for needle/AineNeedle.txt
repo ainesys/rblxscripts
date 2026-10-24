@@ -1,0 +1,389 @@
+-- Search For The Needle: run on the client after entering a round.
+-- Standalone; no downloaded UI or loader. Settings are in this table.
+local Settings = {
+	AutoStart = true,
+	PickInterval = 0.06,
+	PicksPerTick = 3,
+	PickRange = 18,
+	RetryDelay = 0.4,
+	ScanBudget = 1200,
+	SellEvery = 5, -- Also sells immediately when HayCapacity is reached.
+	SellRetry = 0.35,
+	UsePitchfork = true,
+	PitchforkInterval = 0.15,
+	UseVacuum = true,
+	VacuumInterval = 0.12,
+	UseDrone = true,
+	CollectGems = true,
+}
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+assert(player, "Run this on the Roblox client")
+local playerGui = player:WaitForChild("PlayerGui")
+local previous = playerGui:FindFirstChild("AineNeedle")
+if previous then
+	local shutdown = previous:FindFirstChild("Shutdown")
+	if shutdown and shutdown:IsA("BindableFunction") then shutdown:Invoke() else previous:Destroy() end
+end
+
+local closed, enabled = false, Settings.AutoStart
+local connections, folderConnections = {}, {}
+local hayFolder, remoteFolder
+local hay, hayIndex, cursor = {}, {}, 1
+local cooldowns = setmetatable({}, {__mode = "k"})
+local collisions = {}
+local session, sale, vacuumRemote
+local nextPick, nextTool, nextVacuum, nextDrone, nextGem = 0, 0, 0, 0, 0
+local nextSale, nextSaleAttempt, nextBind = 0, 0, 0
+local message, lastError = "Starting", ""
+
+local function connect(signal, callback, bucket)
+	local connection = signal:Connect(callback)
+	table.insert(bucket or connections, connection)
+	return connection
+end
+local function make(class, properties, parent)
+	local object = Instance.new(class)
+	for key, value in pairs(properties) do object[key] = value end
+	object.Parent = parent
+	return object
+end
+local gui = make("ScreenGui", {
+	Name = "AineNeedle", ResetOnSpawn = false, DisplayOrder = 1001,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, playerGui)
+local shutdown = make("BindableFunction", {Name = "Shutdown"}, gui)
+local panel = make("Frame", {
+	Position = UDim2.new(1, -270, 0, 150), Size = UDim2.fromOffset(250, 190),
+	BackgroundColor3 = Color3.fromRGB(21, 26, 36), BorderSizePixel = 0,
+}, gui)
+make("UICorner", {CornerRadius = UDim.new(0, 12)}, panel)
+local function text(value, y, height, size)
+	return make("TextLabel", {
+		BackgroundTransparency = 1, Text = value, TextColor3 = Color3.fromRGB(239, 244, 255),
+		Position = UDim2.fromOffset(12, y), Size = UDim2.new(1, -24, 0, height),
+		Font = Enum.Font.GothamMedium, TextSize = size or 12,
+		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+	}, panel)
+end
+text("NEEDLE FARM", 8, 24, 15)
+local status = text("", 38, 46)
+local stats = text("", 86, 20)
+local function button(caption, x, y, width)
+	local control = make("TextButton", {
+		Text = caption, Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, 32),
+		BackgroundColor3 = Color3.fromRGB(62, 71, 88), BorderSizePixel = 0,
+		TextColor3 = Color3.fromRGB(239, 244, 255), Font = Enum.Font.GothamBold, TextSize = 12,
+	}, panel)
+	make("UICorner", {CornerRadius = UDim.new(0, 8)}, control)
+	return control
+end
+local toggle = button("", 12, 114, 108)
+local sellButton = button("SELL NOW", 130, 114, 108)
+local hide = button("Hide", 130, 154, 70)
+local close = button("X", 208, 154, 30)
+local show = make("TextButton", {
+	Text = "NEEDLE", Position = UDim2.new(1, -100, 0, 150), Size = UDim2.fromOffset(80, 32),
+	BackgroundColor3 = Color3.fromRGB(21, 26, 36), TextColor3 = Color3.new(1, 1, 1),
+	Font = Enum.Font.GothamBold, TextSize = 12, Visible = false,
+}, gui)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, show)
+
+local function remote(name)
+	local object = remoteFolder and remoteFolder:FindFirstChild(name)
+	return object and object:IsA("RemoteEvent") and object or nil
+end
+local function stopVacuum()
+	if vacuumRemote then
+		pcall(function() vacuumRemote:FireServer("Stop") end)
+		vacuumRemote = nil
+	end
+end
+local function restoreCollisions()
+	for part, value in pairs(collisions) do
+		if part.Parent then part.CanCollide = value end
+	end
+	table.clear(collisions)
+end
+local function release()
+	stopVacuum()
+	restoreCollisions()
+	if session and session.hover then session.hover:Destroy() end
+	if session and session.root.Parent then
+		session.root.AssemblyLinearVelocity = Vector3.zero
+		session.root.AssemblyAngularVelocity = Vector3.zero
+	end
+	session, sale = nil, nil
+end
+local function addHay(part)
+	if part:IsA("BasePart") and not hayIndex[part] then
+		hay[#hay + 1] = part
+		hayIndex[part] = #hay
+	end
+end
+local function removeHay(part)
+	local index = hayIndex[part]
+	if not index then return end
+	local last = hay[#hay]
+	hay[index] = last
+	hayIndex[last] = index
+	hay[#hay] = nil
+	hayIndex[part], cooldowns[part] = nil, nil
+end
+local function bindRound()
+	remoteFolder = ReplicatedStorage:FindFirstChild("NeedleHaystack")
+	local folder = workspace:FindFirstChild("HaystackClient")
+	if folder == hayFolder then return end
+	stopVacuum()
+	for _, connection in ipairs(folderConnections) do connection:Disconnect() end
+	table.clear(folderConnections)
+	table.clear(hay)
+	table.clear(hayIndex)
+	cooldowns = setmetatable({}, {__mode = "k"})
+	hayFolder, cursor = folder, 1
+	if folder then
+		connect(folder.DescendantAdded, addHay, folderConnections)
+		connect(folder.DescendantRemoving, removeHay, folderConnections)
+		for _, part in ipairs(folder:GetDescendants()) do addHay(part) end
+	end
+end
+local function pivot(object)
+	if not object then return nil end
+	if object:IsA("BasePart") then return object.CFrame end
+	if object:IsA("Model") then return object:GetPivot() end
+	local part = object:FindFirstChildWhichIsA("BasePart", true)
+	return part and part.CFrame
+end
+local function moveTo(root, destination)
+	root.CFrame = destination
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+local function candidates(position, now)
+	local list = {}
+	local count = #hay
+	for _ = 1, math.min(count, Settings.ScanBudget) do
+		if cursor > count then cursor = 1 end
+		local part = hay[cursor]
+		cursor = cursor + 1
+		if part and part.Parent and part:GetAttribute("HayId") ~= nil
+			and part.Transparency < 1 and (cooldowns[part] or 0) <= now then
+			list[#list + 1] = {part = part, distance = (part.Position - position).Magnitude}
+		end
+	end
+	table.sort(list, function(a, b) return a.distance < b.distance end)
+	return list
+end
+local function setEnabled(value)
+	enabled = value
+	if not value then release() end
+	nextSale = os.clock() + Settings.SellEvery
+	message = value and "Starting" or "Paused"
+end
+
+local function step(now)
+	if now >= nextBind then bindRound(); nextBind = now + 1 end
+	if not enabled then return end
+	if player:GetAttribute("NeedleInputLocked") == true then
+		release(); message = "Waiting for round controls"; return
+	end
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid or humanoid.Health <= 0 then
+		release(); message = "Waiting for respawn"; return
+	end
+	if not hayFolder or not remote("PickHay") or not remote("SellHay") then
+		release(); message = "Enter a round, or check the game's remote names"; return
+	end
+	if session and session.root ~= root then release() end
+	if not session then
+		session = {root = root, hover = make("BodyVelocity", {
+			Name = "NeedleFarmHover", MaxForce = Vector3.new(1e8, 1e8, 1e8),
+			Velocity = Vector3.zero, P = 10000,
+		}, root)}
+	end
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") then
+			if collisions[part] == nil then collisions[part] = part.CanCollide end
+			part.CanCollide = false
+		end
+	end
+	local held = player:GetAttribute("HayHeld")
+	local capacity = player:GetAttribute("HayCapacity")
+	if type(held) ~= "number" then
+		release(); message = "Waiting for HayHeld player attribute"; return
+	end
+	local full = type(capacity) == "number" and capacity > 0 and held >= capacity
+	if not sale and held > 0 and (full or now >= nextSale) then
+		sale = {origin = root.CFrame, started = now}
+		session.gemReturn, session.travelTarget = nil, nil
+		stopVacuum()
+	end
+	if sale then
+		if held <= 0 then
+			moveTo(root, sale.origin)
+			sale = nil
+			nextSale = now + Settings.SellEvery
+			message = "Sale confirmed; collecting"
+			return
+		end
+		local sellModel = workspace:FindFirstChild("SellModel")
+		local cow = sellModel and sellModel:FindFirstChild("Cow", true)
+		local destination = pivot(cow)
+		if not destination then
+			release(); nextSale = now + 1; message = "Cannot find SellModel.Cow"; return
+		end
+		moveTo(root, destination * CFrame.new(0, 3, 5))
+		if now >= nextSaleAttempt and now - sale.started >= 0.15 then
+			remote("SellHay"):FireServer()
+			nextSaleAttempt = now + (now - sale.started > 5 and 1 or Settings.SellRetry)
+		end
+		message = now - sale.started > 5 and "Sell unconfirmed; retrying at cow" or "Selling at cow"
+		return
+	end
+	if Settings.UseDrone and now >= nextDrone and player:GetAttribute("DroneOwned") == true
+		and player:GetAttribute("DroneDeployed") ~= true and remote("DeployDrone") then
+		remote("DeployDrone"):FireServer(); nextDrone = now + 2
+	end
+	if Settings.CollectGems and not session.gemReturn and now >= nextGem and remote("CollectGem") then
+		nextGem = now + 0.5
+		local gems = workspace:FindFirstChild("GemsClient")
+		local best, nearest
+		if gems then
+			for _, gem in ipairs(gems:GetChildren()) do
+				local location = pivot(gem)
+				if gem:GetAttribute("GemId") ~= nil and location and (cooldowns[gem] or 0) <= now then
+					local distance = (location.Position - root.Position).Magnitude
+					if not nearest or distance < nearest then best, nearest = gem, distance end
+				end
+			end
+		end
+		if best then
+			local origin = root.CFrame
+			moveTo(root, pivot(best) + Vector3.new(0, 3, 0))
+			stopVacuum()
+			session.gemReturn = {origin = origin, gem = best, at = now + 0.15}
+			cooldowns[best] = now + 2
+			message = "Collecting gem"
+			return
+		end
+	end
+	if session.gemReturn then
+		local pending = session.gemReturn
+		if now < pending.at then return end
+		if not pending.sent and pending.gem.Parent and remote("CollectGem") then
+			remote("CollectGem"):FireServer(pending.gem:GetAttribute("GemId"))
+			pending.sent = true
+		end
+		-- Allow a replication frame before returning from the pickup.
+		if now < pending.at + 0.1 then return end
+		moveTo(root, pending.origin); session.gemReturn = nil
+	end
+	if now < nextPick then return end
+	nextPick = now + Settings.PickInterval
+	if session.arriveAt and now < session.arriveAt then return end
+	local list = candidates(root.Position, now)
+	local travelTarget = session.travelTarget
+	session.travelTarget, session.arriveAt = nil, nil
+	if travelTarget and travelTarget:IsDescendantOf(hayFolder)
+		and travelTarget:GetAttribute("HayId") ~= nil and travelTarget.Transparency < 1 then
+		table.insert(list, 1, {part = travelTarget, distance = (travelTarget.Position - root.Position).Magnitude})
+	end
+	if #list == 0 then
+		stopVacuum(); message = "Scanning for remaining hay"
+		if held > 0 then nextSale = 0 end
+		return
+	end
+	local target = list[1].part
+	if (target.Position - root.Position).Magnitude > Settings.PickRange - 2 then
+		stopVacuum()
+		moveTo(root, CFrame.new(target.Position + Vector3.new(0, 4, 0)) * root.CFrame.Rotation)
+		session.travelTarget, session.arriveAt = target, now + 0.15
+		message = "Moving to hay"; return
+	end
+	message = "Collecting hay"
+	local preferred = {}
+	for _, entry in ipairs(list) do
+		if (entry.part.Position - root.Position).Magnitude <= Settings.PickRange then
+			preferred[#preferred + 1] = entry.part:GetAttribute("HayId")
+			if #preferred >= 8 then break end
+		end
+	end
+	local vacuum = remote("VacuumAction")
+	local vacuumReady = Settings.UseVacuum and vacuum and player:GetAttribute("VacuumOwned") == true
+		and player:GetAttribute("VacuumState") ~= "Overheated"
+	if vacuumReady then
+		if vacuumRemote ~= vacuum then stopVacuum(); vacuum:FireServer("Start"); vacuumRemote = vacuum end
+		if now >= nextVacuum then
+			vacuum:FireServer("Tick", target.Position, root.Position, preferred)
+			nextVacuum = now + Settings.VacuumInterval
+		end
+		return
+	end
+	stopVacuum()
+	if Settings.UsePitchfork and player:GetAttribute("PitchforkOwned") == true and remote("PitchforkDig") then
+		if now >= nextTool then
+			remote("PitchforkDig"):FireServer(target:GetAttribute("HayId"))
+			cooldowns[target] = now + Settings.RetryDelay
+			nextTool = now + Settings.PitchforkInterval
+		end
+		return
+	end
+	local sent = 0
+	for _, entry in ipairs(list) do
+		local part = entry.part
+		if (part.Position - root.Position).Magnitude <= Settings.PickRange and (cooldowns[part] or 0) <= now then
+			remote("PickHay"):FireServer(part:GetAttribute("HayId"), {})
+			cooldowns[part] = now + Settings.RetryDelay
+			sent = sent + 1
+			if sent >= Settings.PicksPerTick then break end
+		end
+	end
+end
+
+local function cleanup()
+	if closed then return end
+	closed, enabled = true, false
+	for _, connection in ipairs(connections) do connection:Disconnect() end
+	for _, connection in ipairs(folderConnections) do connection:Disconnect() end
+	release()
+	table.clear(hay); table.clear(hayIndex)
+	gui:Destroy()
+end
+shutdown.OnInvoke = cleanup
+connect(gui.Destroying, cleanup)
+connect(close.Activated, cleanup)
+connect(toggle.Activated, function() setEnabled(not enabled) end)
+connect(sellButton.Activated, function() if not enabled then setEnabled(true) end; nextSale = 0 end)
+connect(hide.Activated, function() panel.Visible = false; show.Visible = true end)
+connect(show.Activated, function() panel.Visible = true; show.Visible = false end)
+connect(player.CharacterRemoving, release)
+connect(UserInputService.InputBegan, function(input, processed)
+	if not processed and input.KeyCode == Enum.KeyCode.F6 then setEnabled(not enabled) end
+end)
+local nextUI = 0
+connect(RunService.Heartbeat, function()
+	if closed then return end
+	local now = os.clock()
+	local ok, err = pcall(step, now)
+	if not ok then
+		setEnabled(false)
+		message = "Stopped: " .. tostring(err)
+		if message ~= lastError then warn("Needle farm: " .. tostring(err)); lastError = message end
+	end
+	if now >= nextUI then
+		nextUI = now + 0.2
+		status.Text = message
+		stats.Text = "Hay: " .. tostring(player:GetAttribute("HayHeld") or "?")
+			.. " / " .. tostring(player:GetAttribute("HayCapacity") or "?")
+		toggle.Text = enabled and "FARM ON" or "FARM OFF"
+		toggle.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(62, 71, 88)
+	end
+end)
+setEnabled(enabled)
