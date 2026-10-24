@@ -2,12 +2,13 @@
 -- Standalone; no downloaded UI or loader. Settings are in this table.
 local Settings = {
 	AutoStart = true,
-	PickInterval = 0.06,
-	PicksPerTick = 3,
+	PickInterval = 0.04,
+	CandidateCount = 24,
 	PickRange = 18,
 	RetryDelay = 0.4,
 	ScanBudget = 1200,
-	SellEvery = 5, -- Also sells immediately when HayCapacity is reached.
+	ScanInterval = 0.2,
+	SellEvery = 15, -- Also sells immediately when HayCapacity is reached.
 	SellRetry = 0.35,
 	UsePitchfork = true,
 	PitchforkInterval = 0.15,
@@ -15,6 +16,16 @@ local Settings = {
 	VacuumInterval = 0.12,
 	UseDrone = true,
 	CollectGems = true,
+	AutoBuyUpgrades = true,
+	AutoBuyPitchfork = true,
+	AutoBuyVacuum = true,
+	CashReserve = 0,
+	UpgradeInterval = 0.35,
+	AutoCandles = true,
+	AutoLightCandles = true,
+	AutoDefend = true,
+	AutoBoss = true,
+	AutoSkipEnding = false,
 }
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -25,6 +36,24 @@ local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 assert(player, "Run this on the Roblox client")
 local playerGui = player:WaitForChild("PlayerGui")
+local GameConfig
+local BossAim, BossConfig
+local configFolder = ReplicatedStorage:FindFirstChild("NeedleHaystack")
+local configModule = configFolder and configFolder:FindFirstChild("Config")
+if configModule and configModule:IsA("ModuleScript") then
+	local ok, result = pcall(require, configModule)
+	if ok and type(result) == "table" then GameConfig = result end
+end
+for _, entry in ipairs({{"BossFight", "BossAim"}, {"PumpkinBoss", "Config"}}) do
+	local folder = ReplicatedStorage:FindFirstChild(entry[1])
+	local module = folder and folder:FindFirstChild(entry[2])
+	if module and module:IsA("ModuleScript") then
+		local ok, result = pcall(require, module)
+		if ok and type(result) == "table" then
+			if entry[1] == "BossFight" then BossAim = result else BossConfig = result end
+		end
+	end
+end
 local previous = playerGui:FindFirstChild("AineNeedle")
 if previous then
 	local shutdown = previous:FindFirstChild("Shutdown")
@@ -38,7 +67,12 @@ local hay, hayIndex, cursor = {}, {}, 1
 local cooldowns = setmetatable({}, {__mode = "k"})
 local collisions = {}
 local session, sale, vacuumRemote
-local nextPick, nextTool, nextVacuum, nextDrone, nextGem = 0, 0, 0, 0, 0
+local candleJob, matchJob, pendingUpgrade
+local fightSession, escapeState, grabState
+local candleMarkers = {}
+local nextCandle, nextUpgrade, nextMarkers = 0, 0, 0
+local upgradeMessage = ""
+local nextPick, nextHand, nextTool, nextVacuum, nextDrone, nextGem = 0, 0, 0, 0, 0, 0
 local nextSale, nextSaleAttempt, nextBind = 0, 0, 0
 local message, lastError = "Starting", ""
 
@@ -58,10 +92,14 @@ local gui = make("ScreenGui", {
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, playerGui)
 local shutdown = make("BindableFunction", {Name = "Shutdown"}, gui)
-local panel = make("Frame", {
-	Position = UDim2.new(1, -270, 0, 150), Size = UDim2.fromOffset(250, 190),
-	BackgroundColor3 = Color3.fromRGB(21, 26, 36), BorderSizePixel = 0,
+local surface = make("Frame", {
+	Name = "SafeArea", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
 }, gui)
+local panel = make("Frame", {
+	Name = "Controls", Position = UDim2.new(1, -300, 0, 150), Size = UDim2.fromOffset(280, 294),
+	BackgroundColor3 = Color3.fromRGB(21, 26, 36), BorderSizePixel = 0,
+}, surface)
+local panelScale = make("UIScale", {Scale = 1}, panel)
 make("UICorner", {CornerRadius = UDim.new(0, 12)}, panel)
 local function text(value, y, height, size)
 	return make("TextLabel", {
@@ -71,28 +109,66 @@ local function text(value, y, height, size)
 		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
 	}, panel)
 end
-text("NEEDLE FARM", 8, 24, 15)
+text("NEEDLE OBJECTIVES   ::", 8, 24, 14)
+local dragHandle = make("Frame", {
+	Name = "DragHandle", BackgroundTransparency = 1, Active = true,
+	Position = UDim2.fromOffset(0, 0), Size = UDim2.new(1, 0, 0, 36), ZIndex = 2,
+}, panel)
 local status = text("", 38, 46)
-local stats = text("", 86, 20)
+local stats = text("", 82, 18, 11)
+local eventStats = text("", 103, 18, 11)
 local function button(caption, x, y, width)
 	local control = make("TextButton", {
-		Text = caption, Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, 32),
+		Text = caption, Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(width, 42),
 		BackgroundColor3 = Color3.fromRGB(62, 71, 88), BorderSizePixel = 0,
 		TextColor3 = Color3.fromRGB(239, 244, 255), Font = Enum.Font.GothamBold, TextSize = 12,
 	}, panel)
 	make("UICorner", {CornerRadius = UDim.new(0, 8)}, control)
 	return control
 end
-local toggle = button("", 12, 114, 108)
-local sellButton = button("SELL NOW", 130, 114, 108)
-local hide = button("Hide", 130, 154, 70)
-local close = button("X", 208, 154, 30)
+local toggle = button("", 12, 132, 122)
+local sellButton = button("SELL NOW", 146, 132, 122)
+local upgradeToggle = button("", 12, 184, 122)
+local candleToggle = button("", 146, 184, 122)
+local hide = button("Hide", 146, 240, 70)
+local close = button("X", 226, 240, 42)
 local show = make("TextButton", {
-	Text = "NEEDLE", Position = UDim2.new(1, -100, 0, 150), Size = UDim2.fromOffset(80, 32),
+	Text = "NEEDLE", Position = UDim2.new(1, -110, 0, 150), Size = UDim2.fromOffset(90, 42),
 	BackgroundColor3 = Color3.fromRGB(21, 26, 36), TextColor3 = Color3.new(1, 1, 1),
 	Font = Enum.Font.GothamBold, TextSize = 12, Visible = false,
-}, gui)
+}, surface)
 make("UICorner", {CornerRadius = UDim.new(0, 8)}, show)
+local drag
+local function positionPanel(x, y)
+	local bounds = surface.AbsoluteSize
+	local size = panel.AbsoluteSize
+	if bounds.X <= 0 or bounds.Y <= 0 then return end
+	panel.Position = UDim2.fromOffset(math.clamp(x, 8, math.max(8, bounds.X - size.X - 8)),
+		math.clamp(y, 8, math.max(8, bounds.Y - size.Y - 8)))
+end
+local function layout()
+	local bounds = surface.AbsoluteSize
+	if bounds.X <= 0 or bounds.Y <= 0 then return end
+	panelScale.Scale = math.min(1, (bounds.X - 16) / 280, (bounds.Y - 16) / 294)
+	local relative = panel.AbsolutePosition - surface.AbsolutePosition
+	positionPanel(relative.X, relative.Y)
+	if show.Visible then show.Position = panel.Position end
+end
+connect(dragHandle.InputBegan, function(input)
+	if drag then return end
+	if input.UserInputType ~= Enum.UserInputType.Touch and input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+	drag = {input = input, start = input.Position, origin = panel.AbsolutePosition - surface.AbsolutePosition}
+end)
+connect(UserInputService.InputChanged, function(input)
+	if drag and (input == drag.input or (drag.input.UserInputType == Enum.UserInputType.MouseButton1
+		and input.UserInputType == Enum.UserInputType.MouseMovement)) then
+		local delta = input.Position - drag.start
+		positionPanel(drag.origin.X + delta.X, drag.origin.Y + delta.Y)
+	end
+end)
+connect(UserInputService.InputEnded, function(input) if drag and input == drag.input then drag = nil end end)
+connect(surface:GetPropertyChangedSignal("AbsoluteSize"), layout)
+layout()
 
 local function remote(name)
 	local object = remoteFolder and remoteFolder:FindFirstChild(name)
@@ -112,6 +188,7 @@ local function restoreCollisions()
 end
 local function release()
 	stopVacuum()
+	if session and session.collisionConnection then session.collisionConnection:Disconnect() end
 	restoreCollisions()
 	if session and session.hover then session.hover:Destroy() end
 	if session and session.root.Parent then
@@ -119,6 +196,7 @@ local function release()
 		session.root.AssemblyAngularVelocity = Vector3.zero
 	end
 	session, sale = nil, nil
+	fightSession = nil
 end
 local function addHay(part)
 	if part:IsA("BasePart") and not hayIndex[part] then
@@ -164,24 +242,322 @@ local function moveTo(root, destination)
 	root.AssemblyLinearVelocity = Vector3.zero
 	root.AssemblyAngularVelocity = Vector3.zero
 end
-local function candidates(position, now)
-	local list = {}
-	local count = #hay
-	for _ = 1, math.min(count, Settings.ScanBudget) do
-		if cursor > count then cursor = 1 end
-		local part = hay[cursor]
-		cursor = cursor + 1
-		if part and part.Parent and part:GetAttribute("HayId") ~= nil
-			and part.Transparency < 1 and (cooldowns[part] or 0) <= now then
-			list[#list + 1] = {part = part, distance = (part.Position - position).Magnitude}
+local function sellDestination(position)
+	local model = workspace:FindFirstChild("SellModel")
+	if not model then return nil end
+	local nearest, distance
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name == "SellPart" then
+			local d = (part.Position - position).Magnitude
+			if not distance or d < distance then nearest, distance = part, d end
 		end
 	end
-	table.sort(list, function(a, b) return a.distance < b.distance end)
+	if nearest then return nearest.CFrame + Vector3.new(0, 3, 0) end
+	local vendor = model:FindFirstChild("Scarecrow", true) or model:FindFirstChild("Cow", true)
+	local location = pivot(vendor)
+	return location and location * CFrame.new(0, 3, 5)
+end
+local function getCash()
+	local leaderstats = player:FindFirstChild("leaderstats")
+	local cash = leaderstats and leaderstats:FindFirstChild("Cash")
+	return cash and tonumber(cash.Value) or nil
+end
+local function buyUpgrades(now)
+	if not Settings.AutoBuyUpgrades or not GameConfig or not remote("BuyUpgrade") then return end
+	if pendingUpgrade then
+		local level = tonumber(player:GetAttribute("HayUpgrade" .. pendingUpgrade.track)) or 1
+		local confirmed = pendingUpgrade.owned and player:GetAttribute(pendingUpgrade.owned) == true
+			or not pendingUpgrade.owned and level > pendingUpgrade.level
+		if confirmed then
+			upgradeMessage = "Bought " .. pendingUpgrade.track
+			pendingUpgrade = nil
+		elseif now < pendingUpgrade.untilTime then return
+		else
+			upgradeMessage = "Upgrade unconfirmed; retrying"
+			pendingUpgrade = nil
+			nextUpgrade = now + 2
+			return
+		end
+	end
+	if now < nextUpgrade then return end
+	nextUpgrade = now + Settings.UpgradeInterval
+	local cash = getCash()
+	if not cash then return end
+	local tracks = GameConfig.UPGRADE_TRACKS
+	if type(tracks) ~= "table" then return end
+	local toolGoal
+	if Settings.AutoBuyPitchfork and Settings.UsePitchfork and player:GetAttribute("PitchforkOwned") ~= true
+		and (tonumber(player:GetAttribute("HayUpgradeGrab")) or 1) >= 3
+		and (tonumber(player:GetAttribute("HayUpgradeSpeed")) or 1) >= 3
+		and (tonumber(player:GetAttribute("HayUpgradeCapacity")) or 1) >= 2 then
+		toolGoal = "Pitchfork"
+	elseif Settings.AutoBuyVacuum and Settings.UseVacuum and player:GetAttribute("VacuumOwned") ~= true
+		and player:GetAttribute("PitchforkOwned") == true
+		and (tonumber(player:GetAttribute("HayUpgradePitchfork")) or 1) >= 4
+		and (tonumber(player:GetAttribute("HayUpgradeCapacity")) or 1) >= 3 then toolGoal = "Vacuum" end
+	if toolGoal and remote("BuyShopItem") then
+		local shop = workspace:FindFirstChild("BarnShop")
+		local template = shop and shop:FindFirstChild(toolGoal .. "Template", true)
+		if template and template:GetAttribute("ShopBalanceCurrency") == "Cash"
+			and template:GetAttribute("ShopCurrencyB") == "Coins" then
+			local price = tonumber((tostring(template:GetAttribute("ShopPriceB")):gsub("[^%d%.]", "")))
+			if price and price > 0 then
+				upgradeMessage = string.format("Saving $%.2f for %s", price, toolGoal:lower())
+				if cash - Settings.CashReserve >= price then
+					pendingUpgrade = {track = toolGoal, owned = toolGoal .. "Owned", level = 1, untilTime = now + 2}
+					remote("BuyShopItem"):FireServer(toolGoal)
+				end
+				return
+			end
+		end
+	end
+	local order
+	if Settings.UseVacuum and player:GetAttribute("VacuumOwned") == true then
+		order = {"VacuumPower", "Capacity", "VacuumRuntime", "VacuumCooling"}
+	elseif Settings.UsePitchfork and player:GetAttribute("PitchforkOwned") == true then
+		order = {"Pitchfork", "Capacity", "PitchforkCooldown"}
+	else order = {"Grab", "Speed", "Capacity"} end
+	if Settings.UseDrone and player:GetAttribute("DroneOwned") == true then
+		for _, track in ipairs({"DroneGrab", "DroneSpeed", "DroneCapacity"}) do order[#order + 1] = track end
+	end
+	local best
+	for _, name in ipairs(order) do
+		local track = tracks[name]
+		local level = tonumber(player:GetAttribute("HayUpgrade" .. name)) or 1
+		local nextLevel = track and track.Levels and track.Levels[level + 1]
+		if nextLevel and type(nextLevel.Cost) == "number" then
+			local cost = nextLevel.Cost * (tonumber(player:GetAttribute("UpgradeCostMultiplier")) or 1)
+			if name:sub(1, 9) == "Pitchfork" then
+				cost = cost * (tonumber(player:GetAttribute("PitchforkUpgradeCostMultiplier")) or 1)
+			end
+			cost = math.floor(cost * 100 + 0.5) / 100
+			if cost <= cash - Settings.CashReserve and (not best or level < best.level) then
+				best = {track = name, level = level, untilTime = now + 2}
+			end
+		end
+	end
+	if best then
+		pendingUpgrade = best
+		upgradeMessage = "Buying " .. best.track
+		remote("BuyUpgrade"):FireServer(best.track)
+	end
+end
+local function candleRemote(name)
+	local ritual = ReplicatedStorage:FindFirstChild("CandleRitual")
+	local remotes = ritual and ritual:FindFirstChild("Remotes")
+	local object = remotes and remotes:FindFirstChild(name)
+	return object and object:IsA("RemoteEvent") and object or nil
+end
+local function looseCandle(model)
+	return model:IsA("Model") and model:GetAttribute("HayCandle") == true
+		and model:GetAttribute("Revealed") == true and model:GetAttribute("HeldBy") == nil
+		and model:GetAttribute("Placed") == nil
+end
+local function clearCandleMarkers()
+	for model, marker in pairs(candleMarkers) do marker:Destroy(); candleMarkers[model] = nil end
+end
+local function markCandles(now)
+	if now < nextMarkers then return end
+	nextMarkers = now + 0.3
+	local folder = workspace:FindFirstChild("HayCandles")
+	for model, marker in pairs(candleMarkers) do
+		if not Settings.AutoCandles or not model.Parent or not looseCandle(model) then
+			marker:Destroy(); candleMarkers[model] = nil
+		end
+	end
+	if not Settings.AutoCandles or not folder then return end
+	for _, model in ipairs(folder:GetChildren()) do
+		if looseCandle(model) and not candleMarkers[model] then
+			candleMarkers[model] = make("Highlight", {
+				Name = "NeedleFarmCandle", Adornee = model, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+				FillColor = Color3.fromRGB(255, 170, 40), OutlineColor = Color3.new(1, 1, 1),
+				FillTransparency = 0.35,
+			}, gui)
+		end
+	end
+end
+local function candleStep(root, now)
+	if not Settings.AutoCandles then return false end
+	local folder = workspace:FindFirstChild("HayCandles")
+	local holders = workspace:FindFirstChild("WhereToPlaceCandles")
+	if not folder or not holders or not candleRemote("PickUpCandle") then return false end
+	local carrying = player:GetAttribute("CarryingCandle") ~= nil
+	if not candleJob then
+		local best, nearest
+		if not carrying then
+			for _, model in ipairs(folder:GetChildren()) do
+				if looseCandle(model) and (cooldowns[model] or 0) <= now then
+					local d = (model:GetPivot().Position - root.Position).Magnitude
+					if not nearest or d < nearest then best, nearest = model, d end
+				end
+			end
+		end
+		if not best and not carrying then return false end
+		candleJob = {model = best, origin = root.CFrame, started = now, nextAttempt = 0}
+		stopVacuum()
+		if session then session.gemReturn, session.travelTarget = nil, nil end
+	end
+	local job = candleJob
+	if job.holder then
+		if not job.holder.Parent or job.holder:GetAttribute("Lit") == true then
+			moveTo(root, job.origin)
+			candleJob, matchJob = nil, nil
+			message = "Candle lit; resuming farm"
+			return true
+		end
+		if not carrying and job.placed then
+			message = "Light the candle in the match minigame"
+			return true
+		end
+	end
+	if carrying then
+		if not job.holder or job.holder:GetAttribute("Lit") == true
+			or (job.holder:GetAttribute("ReservedBy") ~= nil and not job.placed) then
+			job.holder = nil
+			local nearest
+			for _, holder in ipairs(holders:GetChildren()) do
+				if holder:IsA("Model") and holder:GetAttribute("Lit") ~= true and holder:GetAttribute("ReservedBy") == nil then
+					local location = pivot(holder:FindFirstChild("Root")) or pivot(holder)
+					local d = location and (location.Position - root.Position).Magnitude
+					if d and (not nearest or d < nearest) then job.holder, nearest = holder, d end
+				end
+			end
+			job.arrivedAt, job.nextAttempt = nil, 0
+		end
+		if not job.holder then message = "Carrying candle; waiting for a free holder"; return true end
+		local location = pivot(job.holder:FindFirstChild("Root")) or pivot(job.holder)
+		moveTo(root, location + Vector3.new(0, 2, 3))
+		if not job.arrivedAt then job.arrivedAt = now end
+		if now - job.arrivedAt >= 0.2 and now >= job.nextAttempt and candleRemote("PlaceCandle") then
+			candleRemote("PlaceCandle"):FireServer(job.holder)
+			job.placed, job.nextAttempt = true, now + 0.75
+		end
+		message = "Placing candle in holder"
+		return true
+	end
+	if not job.model or not job.model.Parent or not looseCandle(job.model) or now - job.started > 4 then
+		if job.model then cooldowns[job.model] = now + 3 end
+		moveTo(root, job.origin); candleJob = nil
+		return true
+	end
+	moveTo(root, job.model:GetPivot() + Vector3.new(0, 2, 3))
+	if now - job.started >= 0.2 and now >= job.nextAttempt then
+		candleRemote("PickUpCandle"):FireServer(job.model)
+		job.nextAttempt = now + 0.6
+	end
+	message = "Collecting " .. job.model.Name
+	return true
+end
+local function combatStep(root, now)
+	if not (Settings.AutoDefend or Settings.AutoBoss) or not BossAim or type(BossAim.rigs) ~= "function" then return false end
+	local target, nearest
+	for _, entry in ipairs(BossAim.rigs()) do
+		local distance = (entry.root.Position - root.Position).Magnitude
+		local eligible = entry.minion and Settings.AutoDefend and distance < 24
+			or not entry.minion and Settings.AutoBoss and Settings.AutoCandles
+		if eligible and (not target or (entry.minion and not target.minion)
+			or entry.minion == target.minion and distance < nearest) then target, nearest = entry, distance end
+	end
+	if not target then
+		if fightSession then
+			moveTo(root, fightSession.origin)
+			fightSession = nil
+		end
+		return false
+	end
+	if player:GetAttribute("PitchforkOwned") ~= true or not remote("PitchforkDig") then
+		if target.minion and nearest < 12 then
+			local p = root.Position
+			moveTo(root, CFrame.new(p.X, math.max(p.Y, target.root.Position.Y + 10), p.Z) * root.CFrame.Rotation)
+		end
+		return false
+	end
+	if not fightSession then fightSession = {origin = root.CFrame} end
+	stopVacuum()
+	if session then session.gemReturn, session.travelTarget = nil, nil end
+	local angle = now * 0.45
+	local location = target.root.Position + Vector3.new(math.cos(angle) * 8, target.minion and 5 or 6, math.sin(angle) * 8)
+	moveTo(root, CFrame.new(location) * root.CFrame.Rotation)
+	message = target.minion and "Defending against skeletons" or "Fighting the Pumpkin Golem"
+	if now >= nextTool then
+		local head = root.Parent:FindFirstChild("Head")
+		if not head then return true end
+		local aim = target.root.Position + Vector3.new(0, 3, 0)
+		local range = BossConfig and BossConfig.PitchforkRange or 13
+		if type(BossAim.assist) == "function" then
+			local point = BossAim.assist(head.Position, aim - head.Position, range, {root.Parent})
+			if point then aim = point end
+		end
+		local direction = aim - head.Position
+		if direction.Magnitude > 0.05 then
+			remote("PitchforkDig"):FireServer("Boss", head.Position, direction.Unit)
+			nextTool = now + (tonumber(player:GetAttribute("PitchforkCooldown")) or 0.85) + 0.02
+		end
+	end
+	return true
+end
+local function extraGrabIds(target)
+	local count = math.max(1, math.floor(tonumber(player:GetAttribute("HayGrabCount")) or 1))
+	local radius = tonumber(player:GetAttribute("HayGrabRadius")) or 0
+	if count <= 1 or radius <= 0 then return {} end
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = {hayFolder}
+	local nearby = {}
+	for _, part in ipairs(workspace:GetPartBoundsInRadius(target.Position, radius, params)) do
+		if part ~= target and hayIndex[part] and part:GetAttribute("HayId") ~= nil then
+			local relative = part.CFrame:PointToObjectSpace(target.Position)
+			local half = part.Size * 0.5
+			local closest = Vector3.new(math.clamp(relative.X, -half.X, half.X),
+				math.clamp(relative.Y, -half.Y, half.Y), math.clamp(relative.Z, -half.Z, half.Z))
+			local distance = (relative - closest).Magnitude
+			if distance <= radius then nearby[#nearby + 1] = {part = part, distance = distance} end
+		end
+	end
+	table.sort(nearby, function(a, b) return a.distance < b.distance end)
+	local ids = {}
+	for index = 1, math.min(count - 1, #nearby) do
+		ids[#ids + 1] = nearby[index].part:GetAttribute("HayId")
+	end
+	return ids
+end
+local function candidates(position, now)
+	local list, seen = {}, {}
+	local limit = math.max(8, Settings.CandidateCount)
+	local function consider(part)
+		if seen[part] then return end
+		seen[part] = true
+		if part and hayIndex[part] and part.Parent and part:GetAttribute("HayId") ~= nil
+			and part.Transparency < 1 and (cooldowns[part] or 0) <= now then
+			local distance = (part.Position - position).Magnitude
+			if #list >= limit and distance >= list[#list].distance then return end
+			local index = #list + 1
+			while index > 1 and list[index - 1].distance > distance do index = index - 1 end
+			table.insert(list, index, {part = part, distance = distance})
+			if #list > limit then list[#list] = nil end
+		end
+	end
+	for _, entry in ipairs(session.nearby or {}) do consider(entry.part) end
+	local moved = not session.scanOrigin or (position - session.scanOrigin).Magnitude > Settings.PickRange / 2
+	if #list < 4 or moved or now >= (session.nextScan or 0) then
+		local count = #hay
+		for _ = 1, math.min(count, Settings.ScanBudget) do
+			if cursor > count then cursor = 1 end
+			consider(hay[cursor])
+			cursor = cursor + 1
+		end
+		session.nextScan, session.scanOrigin = now + Settings.ScanInterval, position
+	end
+	session.nearby = list
 	return list
 end
 local function setEnabled(value)
 	enabled = value
-	if not value then release() end
+	if not value then
+		release(); candleJob, matchJob, pendingUpgrade = nil, nil, nil
+		grabState, escapeState = nil, nil
+		clearCandleMarkers()
+	end
 	nextSale = os.clock() + Settings.SellEvery
 	message = value and "Starting" or "Paused"
 end
@@ -189,14 +565,52 @@ end
 local function step(now)
 	if now >= nextBind then bindRound(); nextBind = now + 1 end
 	if not enabled then return end
+	if player:GetAttribute("NeedleRoundComplete") == true then
+		setEnabled(false); message = "Objectives complete"; return
+	end
+	local pumpkin = ReplicatedStorage:FindFirstChild("PumpkinBoss")
+	local feedback = pumpkin and pumpkin:FindFirstChild("Feedback")
+	if Settings.AutoBoss and feedback and feedback:IsA("RemoteEvent") then
+		if escapeState and Settings.AutoSkipEnding and not escapeState.sent
+			and workspace:GetServerTimeNow() >= escapeState.skipAt then
+			feedback:FireServer("EscapeSkip"); escapeState.sent = true
+		end
+		if grabState then
+			if grabState.deadline and workspace:GetServerTimeNow() > grabState.deadline + 1 then
+				grabState = nil
+			elseif now >= grabState.nextAttempt then
+				feedback:FireServer(grabState.action, grabState.id)
+				grabState.nextAttempt = now + 0.3
+			end
+			if grabState then release(); message = "Escaping the boss grip"; return end
+		end
+	end
+	markCandles(now)
+	if Settings.AutoCandles and Settings.AutoLightCandles and matchJob and candleJob
+		and candleJob.placed and not matchJob.sent and now >= matchJob.readyAt and candleRemote("MatchDone") then
+		candleRemote("MatchDone"):FireServer(matchJob.token)
+		matchJob.sent = true
+	end
+	local boss = workspace:FindFirstChild("PumpkinGolem_Rig")
+	local bossState = boss and boss:GetAttribute("BossState")
+	if player:GetAttribute("CutsceneActive") == true or player:GetAttribute("PumpkinEscape") == true
+		or bossState == "Falling" or bossState == "Defeated" then
+		release(); message = "Finishing the escape objective"; return
+	end
 	if player:GetAttribute("NeedleInputLocked") == true then
-		release(); message = "Waiting for round controls"; return
+		release()
+		message = matchJob and (matchJob.sent and "Waiting for candle lighting confirmation" or "Lighting candle")
+			or "Waiting for round controls"
+		return
 	end
 	local character = player.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if not root or not humanoid or humanoid.Health <= 0 then
 		release(); message = "Waiting for respawn"; return
+	end
+	if character:GetAttribute("BossRagdolled") == true then
+		release(); message = "Recovering from skeleton attack"; return
 	end
 	if not hayFolder or not remote("PickHay") or not remote("SellHay") then
 		release(); message = "Enter a round, or check the game's remote names"; return
@@ -207,18 +621,27 @@ local function step(now)
 			Name = "NeedleFarmHover", MaxForce = Vector3.new(1e8, 1e8, 1e8),
 			Velocity = Vector3.zero, P = 10000,
 		}, root)}
-	end
-	for _, part in ipairs(character:GetDescendants()) do
-		if part:IsA("BasePart") then
-			if collisions[part] == nil then collisions[part] = part.CanCollide end
-			part.CanCollide = false
+		local function trackPart(part)
+			if part:IsA("BasePart") then
+				if collisions[part] == nil then collisions[part] = part.CanCollide end
+				part.CanCollide = false
+			end
 		end
+		session.collisionConnection = character.DescendantAdded:Connect(trackPart)
+		for _, part in ipairs(character:GetDescendants()) do trackPart(part) end
 	end
 	local held = player:GetAttribute("HayHeld")
 	local capacity = player:GetAttribute("HayCapacity")
 	if type(held) ~= "number" then
 		release(); message = "Waiting for HayHeld player attribute"; return
 	end
+	buyUpgrades(now)
+	if combatStep(root, now) then return end
+	local holders = workspace:FindFirstChild("WhereToPlaceCandles")
+	if Settings.AutoCandles and holders and holders:GetAttribute("AllLit") == true then
+		stopVacuum(); message = "Candles complete; waiting for boss"; return
+	end
+	if not sale and candleStep(root, now) then return end
 	local full = type(capacity) == "number" and capacity > 0 and held >= capacity
 	if not sale and held > 0 and (full or now >= nextSale) then
 		sale = {origin = root.CFrame, started = now}
@@ -233,18 +656,16 @@ local function step(now)
 			message = "Sale confirmed; collecting"
 			return
 		end
-		local sellModel = workspace:FindFirstChild("SellModel")
-		local cow = sellModel and sellModel:FindFirstChild("Cow", true)
-		local destination = pivot(cow)
+		local destination = sellDestination(root.Position)
 		if not destination then
-			release(); nextSale = now + 1; message = "Cannot find SellModel.Cow"; return
+			release(); nextSale = now + 1; message = "Cannot find a sell point"; return
 		end
-		moveTo(root, destination * CFrame.new(0, 3, 5))
+		moveTo(root, destination)
 		if now >= nextSaleAttempt and now - sale.started >= 0.15 then
 			remote("SellHay"):FireServer()
 			nextSaleAttempt = now + (now - sale.started > 5 and 1 or Settings.SellRetry)
 		end
-		message = now - sale.started > 5 and "Sell unconfirmed; retrying at cow" or "Selling at cow"
+		message = now - sale.started > 5 and "Sell unconfirmed; retrying at sell point" or "Selling hay"
 		return
 	end
 	if Settings.UseDrone and now >= nextDrone and player:GetAttribute("DroneOwned") == true
@@ -297,53 +718,60 @@ local function step(now)
 	end
 	if #list == 0 then
 		stopVacuum(); message = "Scanning for remaining hay"
-		if held > 0 then nextSale = 0 end
+		if held > 0 and #hay == 0 then nextSale = 0 end
 		return
 	end
 	local target = list[1].part
-	if (target.Position - root.Position).Magnitude > Settings.PickRange - 2 then
+	local vacuum = remote("VacuumAction")
+	local vacuumReady = Settings.UseVacuum and vacuum and player:GetAttribute("VacuumOwned") == true
+		and player:GetAttribute("VacuumOverheated") ~= true and player:GetAttribute("VacuumState") ~= "Overheated"
+	local pitchforkReady = Settings.UsePitchfork and player:GetAttribute("PitchforkOwned") == true and remote("PitchforkDig")
+	local handRate = (tonumber(player:GetAttribute("HayGrabCount")) or 1)
+		/ math.max(0.05, tonumber(player:GetAttribute("HayPickCooldown")) or 0.55)
+	local forkRate = (tonumber(player:GetAttribute("PitchforkScoop")) or 12)
+		/ math.max(0.05, tonumber(player:GetAttribute("PitchforkCooldown")) or 0.85)
+	local vacuumRate = (tonumber(player:GetAttribute("VacuumGrabCount")) or 5)
+		/ math.max(0.05, GameConfig and GameConfig.VACUUM_TICK or 0.16)
+	if pitchforkReady and forkRate < handRate then pitchforkReady = false end
+	if vacuumReady and vacuumRate < math.max(handRate, pitchforkReady and forkRate or 0) then vacuumReady = false end
+	local reach = Settings.PickRange
+	if vacuumReady then reach = math.min(reach, GameConfig and GameConfig.VACUUM_RANGE or 11)
+	elseif pitchforkReady then reach = math.min(reach, tonumber(player:GetAttribute("PitchforkReach")) or 4.2) end
+	if (target.Position - root.Position).Magnitude > reach - 0.5 then
 		stopVacuum()
-		moveTo(root, CFrame.new(target.Position + Vector3.new(0, 4, 0)) * root.CFrame.Rotation)
+		moveTo(root, CFrame.new(target.Position + Vector3.new(0, 2, 0)) * root.CFrame.Rotation)
 		session.travelTarget, session.arriveAt = target, now + 0.15
 		message = "Moving to hay"; return
 	end
 	message = "Collecting hay"
 	local preferred = {}
 	for _, entry in ipairs(list) do
-		if (entry.part.Position - root.Position).Magnitude <= Settings.PickRange then
+		if (entry.part.Position - target.Position).Magnitude <= (GameConfig and GameConfig.VACUUM_HARVEST_REACH or 2.85) then
 			preferred[#preferred + 1] = entry.part:GetAttribute("HayId")
-			if #preferred >= 8 then break end
+			if #preferred >= (tonumber(player:GetAttribute("VacuumGrabCount")) or 5) then break end
 		end
 	end
-	local vacuum = remote("VacuumAction")
-	local vacuumReady = Settings.UseVacuum and vacuum and player:GetAttribute("VacuumOwned") == true
-		and player:GetAttribute("VacuumState") ~= "Overheated"
 	if vacuumReady then
 		if vacuumRemote ~= vacuum then stopVacuum(); vacuum:FireServer("Start"); vacuumRemote = vacuum end
 		if now >= nextVacuum then
 			vacuum:FireServer("Tick", target.Position, root.Position, preferred)
-			nextVacuum = now + Settings.VacuumInterval
+			nextVacuum = now + math.max(Settings.VacuumInterval, GameConfig and GameConfig.VACUUM_TICK or 0.16)
 		end
 		return
 	end
 	stopVacuum()
-	if Settings.UsePitchfork and player:GetAttribute("PitchforkOwned") == true and remote("PitchforkDig") then
+	if pitchforkReady then
 		if now >= nextTool then
 			remote("PitchforkDig"):FireServer(target:GetAttribute("HayId"))
 			cooldowns[target] = now + Settings.RetryDelay
-			nextTool = now + Settings.PitchforkInterval
+			nextTool = now + math.max(Settings.PitchforkInterval, tonumber(player:GetAttribute("PitchforkCooldown")) or 0.85) + 0.01
 		end
 		return
 	end
-	local sent = 0
-	for _, entry in ipairs(list) do
-		local part = entry.part
-		if (part.Position - root.Position).Magnitude <= Settings.PickRange and (cooldowns[part] or 0) <= now then
-			remote("PickHay"):FireServer(part:GetAttribute("HayId"), {})
-			cooldowns[part] = now + Settings.RetryDelay
-			sent = sent + 1
-			if sent >= Settings.PicksPerTick then break end
-		end
+	if now >= nextHand then
+		remote("PickHay"):FireServer(target:GetAttribute("HayId"), extraGrabIds(target))
+		nextHand = now + math.max(Settings.PickInterval, tonumber(player:GetAttribute("HayPickCooldown")) or 0.55) + 0.01
+		cooldowns[target] = nextHand
 	end
 end
 
@@ -353,6 +781,7 @@ local function cleanup()
 	for _, connection in ipairs(connections) do connection:Disconnect() end
 	for _, connection in ipairs(folderConnections) do connection:Disconnect() end
 	release()
+	clearCandleMarkers()
 	table.clear(hay); table.clear(hayIndex)
 	gui:Destroy()
 end
@@ -361,9 +790,37 @@ connect(gui.Destroying, cleanup)
 connect(close.Activated, cleanup)
 connect(toggle.Activated, function() setEnabled(not enabled) end)
 connect(sellButton.Activated, function() if not enabled then setEnabled(true) end; nextSale = 0 end)
-connect(hide.Activated, function() panel.Visible = false; show.Visible = true end)
+connect(upgradeToggle.Activated, function()
+	Settings.AutoBuyUpgrades = not Settings.AutoBuyUpgrades
+	if not Settings.AutoBuyUpgrades then pendingUpgrade = nil; upgradeMessage = "" end
+end)
+connect(candleToggle.Activated, function()
+	Settings.AutoCandles = not Settings.AutoCandles
+	if not Settings.AutoCandles then candleJob, matchJob = nil, nil; clearCandleMarkers() end
+end)
+connect(hide.Activated, function() drag = nil; show.Position = panel.Position; panel.Visible = false; show.Visible = true end)
 connect(show.Activated, function() panel.Visible = true; show.Visible = false end)
-connect(player.CharacterRemoving, release)
+connect(player.CharacterRemoving, function() release(); candleJob, matchJob, grabState = nil, nil, nil end)
+local pumpkin = ReplicatedStorage:FindFirstChild("PumpkinBoss")
+local feedback = pumpkin and pumpkin:FindFirstChild("Feedback")
+if feedback and feedback:IsA("RemoteEvent") then
+	connect(feedback.OnClientEvent, function(kind, data)
+		if type(data) ~= "table" then return end
+		if kind == "Grabbed" and data.userId == player.UserId then
+			grabState = {action = "GrabEscape", id = data.id, deadline = data.deadline, nextAttempt = os.clock() + 0.85}
+		elseif kind == "Pulled" and type(data.users) == "table" and table.find(data.users, player.UserId) then
+			grabState = {action = "PullEscape", id = data.id, deadline = data.deadline, nextAttempt = os.clock() + 0.65}
+		elseif (kind == "GrabEnd" or kind == "PullEnd") and data.userId == player.UserId then grabState = nil
+		elseif kind == "ClearAreas" then grabState = nil
+		elseif kind == "Escape" and type(data.skipAt) == "number" then escapeState = {skipAt = data.skipAt} end
+	end)
+end
+local matchPuzzle = candleRemote("MatchPuzzle")
+if matchPuzzle then
+	connect(matchPuzzle.OnClientEvent, function(token, delay)
+		matchJob = token ~= nil and {token = token, readyAt = os.clock() + (tonumber(delay) or 0) + 3} or nil
+	end)
+end
 connect(UserInputService.InputBegan, function(input, processed)
 	if not processed and input.KeyCode == Enum.KeyCode.F6 then setEnabled(not enabled) end
 end)
@@ -379,11 +836,23 @@ connect(RunService.Heartbeat, function()
 	end
 	if now >= nextUI then
 		nextUI = now + 0.2
-		status.Text = message
+		local remaining = remoteFolder and tonumber(remoteFolder:GetAttribute("RemainingHay"))
+		local total = remoteFolder and tonumber(remoteFolder:GetAttribute("TotalHay"))
+		local progress = remaining and total and total > 0 and string.format("%.1f%% cleared", (1 - remaining / total) * 100) or ""
+		status.Text = message .. ((progress ~= "" or upgradeMessage ~= "") and ("\n" .. progress
+			.. (progress ~= "" and upgradeMessage ~= "" and " | " or "") .. upgradeMessage) or "")
 		stats.Text = "Hay: " .. tostring(player:GetAttribute("HayHeld") or "?")
 			.. " / " .. tostring(player:GetAttribute("HayCapacity") or "?")
-		toggle.Text = enabled and "FARM ON" or "FARM OFF"
+			.. string.format("   $%.2f", getCash() or 0)
+		local holders = workspace:FindFirstChild("WhereToPlaceCandles")
+		eventStats.Text = holders and ("Candles found " .. tostring(holders:GetAttribute("CandlesFound") or 0)
+			.. " | lit " .. tostring(holders:GetAttribute("CandlesLit") or 0) .. "/4") or upgradeMessage
+		toggle.Text = enabled and "AUTO ON" or "AUTO OFF"
 		toggle.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(62, 71, 88)
+		upgradeToggle.Text = Settings.AutoBuyUpgrades and "BUY ON" or "BUY OFF"
+		upgradeToggle.BackgroundColor3 = Settings.AutoBuyUpgrades and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(62, 71, 88)
+		candleToggle.Text = Settings.AutoCandles and "OBJECTIVES ON" or "OBJECTIVES OFF"
+		candleToggle.BackgroundColor3 = Settings.AutoCandles and Color3.fromRGB(0, 180, 95) or Color3.fromRGB(62, 71, 88)
 	end
 end)
 setEnabled(enabled)
