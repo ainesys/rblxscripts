@@ -1,0 +1,779 @@
+-- Run in a 99 Nights round. Quest actions wait for replicated progress.
+local Settings = {
+	AutoStart = true,
+	AutoFuel = true,
+	AutoChop = true,
+	AutoEnterVoid = true,
+	LowHealth = 30,
+	PickupWait = 3,
+	HoverHeight = 28,
+	MobDistance = 38,
+	AutoEat = true,
+	AutoHeal = true,
+	HealBelow = 85,
+	AutoDefend = true,
+	AutoSupplies = true,
+	AutoUpgrades = true,
+	RequireSafetySupplies = true,
+}
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local env = getgenv and getgenv() or _G
+if env.AineHollow then env.AineHollow.Close() end
+
+local state = {enabled = Settings.AutoStart, closed = false, generation = 0,
+	status = "Starting", picked = 0, total = 20, failed = false}
+local connections = {}
+local cooldowns = setmetatable({}, {__mode = "k"})
+local client, dragged, worker
+local nextEntrance = 0
+local nextFood = 0
+local nextHeal, nextShot, nextUpgrade = 0, 0, 0
+local supplies = {nextScan = 0, chests = {}}
+local guard = {untilTime = 0, mobs = {}, nextScan = 0}
+local function connect(signal, callback)
+	local connection = signal:Connect(callback)
+	table.insert(connections, connection)
+	return connection
+end
+local function make(class, properties, parent)
+	local object = Instance.new(class)
+	for key, value in pairs(properties) do object[key] = value end
+	object.Parent = parent
+	return object
+end
+local gui = make("ScreenGui", {Name = "AineHollow", ResetOnSpawn = false,
+	DisplayOrder = 1100, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, playerGui)
+local surface = make("Frame", {Name = "SafeArea", BackgroundTransparency = 1,
+	Size = UDim2.fromScale(1, 1)}, gui)
+local panel = make("Frame", {Name = "QuestControls", Size = UDim2.fromOffset(290, 260),
+	Position = UDim2.new(1, -310, 0, 135), BackgroundColor3 = Color3.fromRGB(17, 22, 43),
+	BorderSizePixel = 0}, surface)
+make("UICorner", {CornerRadius = UDim.new(0, 12)}, panel)
+local scale = make("UIScale", {Scale = 1}, panel)
+local function label(text, y, height, size)
+	return make("TextLabel", {Text = text, BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(12, y), Size = UDim2.new(1, -24, 0, height),
+		TextColor3 = Color3.fromRGB(240, 243, 255), TextSize = size or 13,
+		Font = Enum.Font.GothamMedium, TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left}, panel)
+end
+label("99 NIGHTS  /  THE HOLLOW", 8, 24, 15)
+local statusLabel = label("", 38, 48)
+local progressLabel = label("", 86, 20, 12)
+local function button(text, x, y, width)
+	local result = make("TextButton", {Text = text, Position = UDim2.fromOffset(x, y),
+		Size = UDim2.fromOffset(width, 42), BackgroundColor3 = Color3.fromRGB(60, 68, 97),
+		TextColor3 = Color3.new(1, 1, 1), TextSize = 12, Font = Enum.Font.GothamBold}, panel)
+	make("UICorner", {CornerRadius = UDim.new(0, 8)}, result)
+	return result
+end
+local autoButton = button("", 12, 114, 128)
+local enterButton = button("ENTER VOID", 150, 114, 128)
+local safeButton = button("SAFE LANTERN", 12, 166, 128)
+local fuelButton = button("", 150, 166, 128)
+local hideButton = button("Hide", 150, 218, 76)
+local closeButton = button("X", 236, 218, 42)
+local showButton = make("TextButton", {Text = "HOLLOW", Size = UDim2.fromOffset(100, 42),
+	Position = UDim2.new(1, -120, 0, 135), BackgroundColor3 = Color3.fromRGB(17, 22, 43),
+	TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 13,
+	Visible = false}, surface)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, showButton)
+
+local function character()
+	local model = player.Character
+	local root = model and model:FindFirstChild("HumanoidRootPart")
+	local humanoid = model and model:FindFirstChildOfClass("Humanoid")
+	if root and humanoid and humanoid.Health > 0 then return model, root, humanoid end
+end
+local function remotes()
+	return ReplicatedStorage:FindFirstChild("RemoteEvents")
+end
+local function active(generation, model)
+	return not state.closed and state.enabled and state.generation == generation
+		and player.Character == model and character() ~= nil
+end
+local function releaseHover()
+	if guard.force then guard.force:Destroy() end
+	if guard.attachment then guard.attachment:Destroy() end
+	guard.force, guard.attachment, guard.root = nil, nil, nil
+end
+local function hover(root, position)
+	if guard.root ~= root then
+		releaseHover()
+		guard.root = root
+		guard.attachment = make("Attachment", {Name = "HollowSafetyAttachment"}, root)
+		guard.force = make("AlignPosition", {Name = "HollowSafetyHover",
+			Mode = Enum.PositionAlignmentMode.OneAttachment, Attachment0 = guard.attachment,
+			MaxForce = math.max(100000, root.AssemblyMass * workspace.Gravity * 20),
+			MaxVelocity = 100, Responsiveness = 100, Position = position}, root)
+	end
+	guard.force.Position = position
+end
+local function mobNear(position, distance)
+	if os.clock() >= guard.nextScan then
+		guard.nextScan = os.clock() + 0.3
+		guard.mobs = CollectionService:GetTagged("NPC")
+	end
+	for _, mob in ipairs(guard.mobs) do
+		if mob:IsDescendantOf(workspace) and mob:IsA("Model") and mob.Name ~= "Bunny"
+			and mob.Name ~= "Bee" and not Players:GetPlayerFromCharacter(mob) then
+			local root = mob:FindFirstChild("HumanoidRootPart") or mob.PrimaryPart
+			local pos = root and root.Position or mob:GetPivot().Position
+			local health = mob:GetAttribute("Health")
+			local radius = mob.Name:find("Crossbow") and distance * 2 or distance
+			if (health == nil or health > 0) and (pos - position).Magnitude < radius then return true, mob end
+		end
+	end
+	return false
+end
+local function move(root, position, lookAt)
+	hover(root, position)
+	root.CFrame = lookAt and CFrame.lookAt(position, lookAt) or CFrame.new(position)
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+local function stopDragging()
+	if not dragged then return end
+	local events = remotes()
+	local stop = events and events:FindFirstChild("StopDraggingItem")
+	if stop then pcall(function() stop:FireServer(dragged) end) end
+	dragged = nil
+end
+local function update()
+	if state.closed then return end
+	statusLabel.Text = state.status
+	local _, _, hum = character()
+	progressLabel.Text = string.format("Flowers: %d / %d   |   Fire: %s   |   HP: %s",
+		state.picked, state.total, tostring(workspace:GetAttribute("Progress") or "?"),
+		hum and tostring(math.floor(hum.Health)) or "dead")
+	autoButton.Text = state.enabled and "QUEST: ON" or "QUEST: OFF"
+	autoButton.BackgroundColor3 = state.enabled and Color3.fromRGB(0, 145, 88) or Color3.fromRGB(60, 68, 97)
+	fuelButton.Text = Settings.AutoFuel and "FUEL: ON" or "FUEL: OFF"
+end
+local function setEnabled(enabled)
+	state.enabled = enabled
+	state.generation = state.generation + 1
+	stopDragging()
+	state.status = enabled and "Quest automation enabled" or "Paused"
+	update()
+end
+local function close()
+	if state.closed then return end
+	setEnabled(false)
+	state.closed = true
+	stopDragging()
+	releaseHover()
+	for _, connection in ipairs(connections) do connection:Disconnect() end
+	if worker and coroutine.running() ~= worker then pcall(task.cancel, worker) end
+	gui:Destroy()
+	if env.AineHollow and env.AineHollow.State == state then env.AineHollow = nil end
+end
+env.AineHollow = {Close = close, State = state, SetEnabled = setEnabled}
+local shutdown = make("BindableFunction", {Name = "Shutdown"}, gui)
+shutdown.OnInvoke = close
+
+local function getClient()
+	if client then return client end
+	local scripts = player:FindFirstChild("PlayerScripts")
+	local module = scripts and scripts:FindFirstChild("Client")
+	if module and module:IsA("ModuleScript") then
+		local ok, value = pcall(require, module)
+		if ok then client = value end
+	end
+	return client
+end
+local function flowerProgress()
+	local map = workspace:FindFirstChild("HollowMap")
+	if not map then return 0, 0, nil end
+	local total = map:GetAttribute("PlantCount") or 0
+	local remaining = 0
+	for key in pairs(map:GetAttributes()) do
+		if key:match("^HollowPlant%d+$") then remaining = remaining + 1 end
+	end
+	return math.max(0, total - remaining), total, map
+end
+local function nearestTagged(tag, root, available)
+	local best, distance
+	for _, object in ipairs(CollectionService:GetTagged(tag)) do
+		if object:IsDescendantOf(workspace) and (not available or available(object)) then
+			local delta = (object:GetPivot().Position - root.Position).Magnitude
+			if not distance or delta < distance then best, distance = object, delta end
+		end
+	end
+	return best
+end
+local function safeLantern()
+	local _, root = character()
+	if not root then state.status = "Dead: waiting for revival"; return false end
+	local lantern = nearestTagged("HollowLantern", root)
+	if lantern then
+		local part = lantern:FindFirstChild("LanternPart", true)
+		move(root, (part and part.Position or lantern:GetPivot().Position) + Vector3.new(3, 15, 0))
+		state.status = "At the nearest safe lantern"
+		return true
+	end
+	state.status = "No active Hollow lantern is available"
+	return false
+end
+local function enterVoid()
+	local model, root = character()
+	if not root then state.status = "Dead: waiting for revival"; return end
+	if player:GetAttribute("InHollowRun") then state.status = "Already in the Hollow"; return end
+	if (workspace:GetAttribute("Progress") or 0) < 3 then
+		state.status = "The void requires fire level 3"
+		return
+	end
+	if os.clock() < nextEntrance then return end
+	nextEntrance = os.clock() + 8
+	local events = remotes()
+	local lookup = events and events:FindFirstChild("GetHollowEntrancePosition")
+	if not lookup then state.status = "Join a round to find the void"; return end
+	state.status = "Locating the void marked on the map"
+	local position = lookup:InvokeServer()
+	if state.closed or player.Character ~= model then return end
+	if typeof(position) ~= "Vector3" then state.status = "Void entrance is not available yet"; return end
+	local map = workspace:FindFirstChild("Map")
+	local landmarks = map and map:FindFirstChild("Landmarks")
+	local portal = landmarks and landmarks:FindFirstChild("HollowEntrance")
+	local functional = portal and portal:FindFirstChild("Functional")
+	local pad = functional and functional:FindFirstChild("BeamPart", true)
+	move(root, pad and pad.Position + Vector3.new(0, 2, 0) or position)
+	state.status = "Entering the void; waiting for the game"
+end
+
+local function fuelFire(model, root, generation)
+	local map = workspace:FindFirstChild("Map")
+	local camp = map and map:FindFirstChild("Campground")
+	local fire = camp and camp:FindFirstChild("MainFire")
+	local items = workspace:FindFirstChild("Items")
+	local events = remotes()
+	if not fire or not items or not events then state.status = "Waiting for round objects"; return end
+	local origin = fire:GetPivot().Position
+	local limit = math.max(80, (workspace:GetAttribute("MapRange") or 200) - 25)
+	local allowed = {Log = true, Coal = true, Chair = true, ["Fuel Canister"] = true, ["Oil Barrel"] = true}
+	local item, distance
+	for _, candidate in ipairs(items:GetChildren()) do
+		if candidate:IsA("Model") and allowed[candidate.Name] and candidate.PrimaryPart
+			and (candidate:GetAttribute("BurnFuel") or 0) > 0 and (candidate:GetAttribute("Wet") or 0) < 1
+			and (not candidate:GetAttribute("Owner") or candidate:GetAttribute("Owner") == player.UserId)
+			and os.clock() >= (cooldowns[candidate] or 0) then
+			local pos = candidate:GetPivot().Position
+			local delta = ((pos - origin) * Vector3.new(1, 0, 1)).Magnitude
+			if delta < limit and math.abs(pos.Y - origin.Y) < 90 and (not distance or delta < distance) then
+				item, distance = candidate, delta
+			end
+		end
+	end
+	if not item then return false end
+	state.status = "Bringing " .. item.Name .. " to the fire"
+	update()
+	local itemPosition = item:GetPivot().Position
+	if mobNear(itemPosition, Settings.MobDistance) then cooldowns[item] = os.clock() + 10; return true end
+	move(root, itemPosition + Vector3.new(0, 3, 0))
+	task.wait(0.45)
+	if not active(generation, model) then return true end
+	if (root.Position - itemPosition).Magnitude > 18 then
+		cooldowns[item] = os.clock() + 30
+		move(root, origin + Vector3.new(8, 3, 0))
+		state.status = "Fuel is beyond the unlocked area"
+		return true
+	end
+	events.RequestStartDraggingItem:FireServer(item)
+	dragged = item
+	task.wait(0.4)
+	if not active(generation, model) or not item.Parent then stopDragging(); return true end
+	move(root, origin + Vector3.new(8, 7, 0))
+	local beforeFuel = fire:GetAttribute("FuelRemaining") or 0
+	local beforeLevel = workspace:GetAttribute("Progress") or 0
+	-- Let the owned item replicate above the touch zone before it falls in.
+	item.PrimaryPart.CFrame = CFrame.new(origin + Vector3.new(0, 22, 0))
+	item.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+	task.wait(0.7)
+	if not active(generation, model) then stopDragging(); return true end
+	if item.Parent and (item:GetPivot().Position - origin).Magnitude <= 15 then
+		events.RequestBurnItem:FireServer(fire, item)
+	end
+	local confirmed = false
+	for _ = 1, 20 do
+		if not active(generation, model) then break end
+		if (fire:GetAttribute("FuelRemaining") or 0) > beforeFuel
+			or (workspace:GetAttribute("Progress") or 0) > beforeLevel then confirmed = true; break end
+		task.wait(0.1)
+	end
+	stopDragging()
+	if active(generation, model) then move(root, origin + Vector3.new(8, Settings.HoverHeight, 0)) end
+	cooldowns[item] = os.clock() + 30
+	state.status = confirmed and "Server confirmed fuel added" or "Fuel unconfirmed; trying another source"
+	return true
+end
+
+local function chopTree(model, root, generation)
+	local gameClient = getClient()
+	local inventory = player:FindFirstChild("Inventory")
+	local map = workspace:FindFirstChild("Map")
+	local foliage = map and map:FindFirstChild("Foliage")
+	local tool
+	if inventory then
+		for _, candidate in ipairs(inventory:GetChildren()) do
+			if candidate:GetAttribute("ToolName") == "GenericAxe" then tool = candidate; break end
+		end
+	end
+	if not gameClient or not gameClient.EnemyHandler or not tool or not foliage then return false end
+	local tree, distance
+	for _, candidate in ipairs(foliage:GetChildren()) do
+		local trunk = candidate:FindFirstChild("Trunk")
+		if candidate.Name == "Small Tree" and trunk and (candidate:GetAttribute("Health") or 0) > 0
+			and os.clock() >= (cooldowns[candidate] or 0) and not mobNear(trunk.Position, Settings.MobDistance) then
+			local delta = (trunk.Position * Vector3.new(1, 0, 1)).Magnitude
+			if delta < 130 and (not distance or delta < distance) then tree, distance = candidate, delta end
+		end
+	end
+	if not tree then return false end
+	state.status = "Chopping a nearby small tree for fuel"
+	update()
+	local trunk = tree.Trunk
+	local pos = trunk.Position + Vector3.new(4, 2, 0)
+	move(root, pos, Vector3.new(trunk.Position.X, pos.Y, trunk.Position.Z))
+	task.wait(0.45)
+	if not active(generation, model) or (root.Position - trunk.Position).Magnitude > 15 then return true end
+	local equipped = gameClient.InventoryHandler.GetCurrentlyEquippedClass()
+	if not equipped or equipped.Model ~= tool then
+		gameClient.InventoryHandler.RequestEquipItem(tool)
+		task.wait(0.3)
+	end
+	if not active(generation, model) then return true end
+	gameClient.InventoryHandler.ActivateTool()
+	task.wait(math.max(0.5, tool:GetAttribute("ToolCooldown") or 0.5))
+	return true
+end
+
+local function collectFlower(model, root, generation)
+	local plant = nearestTagged("HollowPlant", root, function(object)
+		return not object:GetAttribute("Collected") and os.clock() >= (cooldowns[object] or 0)
+			and not mobNear(object:GetPivot().Position, Settings.MobDistance)
+	end)
+	if not plant then
+		local map = workspace:FindFirstChild("HollowMap")
+		local zoneY = -300
+		local gameClient = getClient()
+		if gameClient and gameClient.ZoneModule then zoneY = gameClient.ZoneModule.GetZoneCFrame("Hollow").Position.Y end
+		local best, nearest, key
+		if map then
+			for name, value in pairs(map:GetAttributes()) do
+				if name:match("^HollowPlant%d+$") and typeof(value) == "Vector3"
+					and os.clock() >= (cooldowns[name] or 0) then
+					local pos = Vector3.new(value.X, zoneY, value.Z)
+					local distance = (pos - root.Position).Magnitude
+					if not mobNear(pos, Settings.MobDistance) and (not nearest or distance < nearest) then
+						best, nearest, key = pos, distance, name
+					end
+				end
+			end
+		end
+		if best then
+			state.status = "Loading an unexplored flower location"
+			move(root, best + Vector3.new(0, Settings.HoverHeight, 0))
+			pcall(function() player:RequestStreamAroundAsync(best, 2) end)
+			cooldowns[key] = os.clock() + 3
+		else
+			state.status = "Waiting for a safe flower route or the quest ending"
+		end
+		return
+	end
+	state.status = "Moving to the next red flower"
+	update()
+	local position = plant:GetPivot().Position
+	move(root, position + Vector3.new(0, 3, 0))
+	task.wait(0.25)
+	if not active(generation, model) or not player:GetAttribute("InHollowRun") then return end
+	local prompt = plant:FindFirstChildWhichIsA("ProximityPrompt", true)
+	if prompt and prompt.Enabled then
+		if type(fireproximityprompt) == "function" then
+			fireproximityprompt(prompt)
+		else
+			prompt:InputHoldBegin()
+			task.wait(prompt.HoldDuration + 0.1)
+			prompt:InputHoldEnd()
+		end
+	end
+	local deadline = os.clock() + Settings.PickupWait
+	while active(generation, model) and player:GetAttribute("InHollowRun")
+		and plant.Parent and not plant:GetAttribute("Collected") and os.clock() < deadline do
+		task.wait(0.1)
+	end
+	if plant:GetAttribute("Collected") then
+		state.status = "Server confirmed a red flower"
+	else
+		cooldowns[plant] = os.clock() + 5
+		state.status = "Flower not confirmed; retrying after cooldown"
+	end
+	if active(generation, model) then move(root, position + Vector3.new(0, Settings.HoverHeight, 0)) end
+end
+
+local function eatFood(model, root, generation)
+	local hunger = player:GetAttribute("Hunger")
+	if not Settings.AutoEat or type(hunger) ~= "number" or hunger >= 55 or os.clock() < nextFood then return false end
+	nextFood = os.clock() + 3
+	local items = workspace:FindFirstChild("Items")
+	if not items then return false end
+	local food, distance
+	local range = math.max(80, (workspace:GetAttribute("MapRange") or 200) - 25)
+	for _, item in ipairs(items:GetChildren()) do
+		if item:IsA("Model") and item.PrimaryPart and (item:GetAttribute("RestoreHunger") or 0) > 0
+			and not item:GetAttribute("Cookable") and (item:GetAttribute("RestoreHealth") or 0) >= 0
+			and os.clock() >= (cooldowns[item] or 0) then
+			local pos = item:GetPivot().Position
+			local delta = (pos - root.Position).Magnitude
+			if (pos * Vector3.new(1, 0, 1)).Magnitude < range and not mobNear(pos, Settings.MobDistance)
+				and (not distance or delta < distance) then food, distance = item, delta end
+		end
+	end
+	if not food then
+		if hunger < 15 then state.status = "Hunger is low: no safe ready-to-eat food found" end
+		return false
+	end
+	local origin = root.Position
+	local pos = food:GetPivot().Position
+	state.status = "Eating " .. food.Name
+	move(root, pos + Vector3.new(0, 3, 0))
+	task.wait(0.4)
+	if active(generation, model) and (root.Position - pos).Magnitude < 15 then
+		local events = remotes()
+		if events and events:FindFirstChild("RequestConsumeItem") then events.RequestConsumeItem:InvokeServer(food) end
+	end
+	if active(generation, model) then move(root, origin) end
+	cooldowns[food] = os.clock() + 15
+	return true
+end
+
+local function equipItem(item)
+	local gameClient = getClient()
+	if not gameClient or not gameClient.InventoryHandler then return end
+	local inventory = gameClient.InventoryHandler
+	local equipped = inventory.GetCurrentlyEquippedClass()
+	if not equipped or equipped.Model ~= item then
+		inventory.RequestEquipItem(item)
+		task.wait(0.25)
+		equipped = inventory.GetCurrentlyEquippedClass()
+	end
+	return equipped and equipped.Model == item and equipped.Tool or nil
+end
+local function heal(model, root, hum)
+	if not Settings.AutoHeal or hum.Health >= hum.MaxHealth * Settings.HealBelow / 100
+		or os.clock() < nextHeal then return false end
+	local inventory = player:FindFirstChild("Inventory")
+	local chosen
+	if inventory then
+		for _, item in ipairs(inventory:GetChildren()) do
+			if item.Name == "Bandage" or item.Name == "MedKit" then
+				if not chosen or item.Name == "MedKit" and hum.Health < hum.MaxHealth * 0.4 then chosen = item end
+			end
+		end
+	end
+	if not chosen then return false end
+	nextHeal = os.clock() + 3
+	state.status = "Using " .. chosen.Name
+	update()
+	local tool = equipItem(chosen)
+	if state.closed or player.Character ~= model or not tool then return false end
+	local before = hum.Health
+	tool:Activate()
+	for _ = 1, 30 do
+		if state.closed or player.Character ~= model or hum.Health > before then break end
+		task.wait(0.1)
+	end
+	state.status = hum.Health > before and "Healing confirmed" or "Healing not yet confirmed"
+	return true
+end
+local function chooseUpgrade()
+	if not Settings.AutoUpgrades or (player:GetAttribute("HollowUpgradesReady") or 0) <= 0
+		or os.clock() < nextUpgrade then return false end
+	local events = remotes()
+	if not events or not events:FindFirstChild("GetHollowUpgradeOffer") then return false end
+	nextUpgrade = os.clock() + 2
+	local choices = events.GetHollowUpgradeOffer:InvokeServer()
+	if type(choices) ~= "table" then return false end
+	local best, score
+	for _, choice in ipairs(choices) do
+		local text = tostring(choice.Text or ""):lower()
+		local rank = text:find("heal") and 100 or text:find("damage") and 80
+			or text:find("stun") and 70 or text:find("hunger") and 60 or text:find("speed") and 50 or 1
+		if not score or rank > score then best, score = choice, rank end
+	end
+	if best then
+		task.wait(0.45)
+		if state.closed then return true end
+		local ok = events.ChooseHollowUpgrade:InvokeServer(best.Id)
+		state.status = ok and "Hollow upgrade: " .. tostring(best.Text) or "Upgrade not confirmed"
+	end
+	return true
+end
+local function defend(model, root)
+	if not Settings.AutoDefend or os.clock() < nextShot then return false end
+	local target, targetPart, distance
+	for _, mob in ipairs(CollectionService:GetTagged("NPC")) do
+		if mob:IsA("Model") and mob:IsDescendantOf(workspace) and not Players:GetPlayerFromCharacter(mob)
+			and mob.Name ~= "Bunny" and mob.Name ~= "Bee" and not mob:GetAttribute("NotDamageable")
+			and (mob:GetAttribute("Health") or 1) > 0 then
+			local part = mob:FindFirstChild("Head") or mob:FindFirstChild("HumanoidRootPart") or mob.PrimaryPart
+			if part and part:IsA("BasePart") then
+				local delta = (part.Position - root.Position).Magnitude
+				if delta < 160 and (not distance or delta < distance) then target, targetPart, distance = mob, part, delta end
+			end
+		end
+	end
+	if not target then return false end
+	local inventory = player:FindFirstChild("Inventory")
+	local gun
+	if inventory then
+		for _, item in ipairs(inventory:GetChildren()) do
+			if item:GetAttribute("ToolName") == "Firearm" then
+				local ammoType = item:GetAttribute("AmmoType") or "RifleAmmo"
+				if (item:GetAttribute("Ammo") or 0) > 0 or (player:GetAttribute(ammoType) or 0) > 0 then gun = item; break end
+			end
+		end
+	end
+	if not gun then return false end
+	local gameClient = getClient()
+	local origin = (model:FindFirstChild("Head") or root).Position
+	local params = gameClient and gameClient.CollisionUtility and gameClient.CollisionUtility.ProjectileParams
+	local hit = workspace:Raycast(origin, targetPart.Position - origin, params)
+	if hit and not hit.Instance:IsDescendantOf(target) then return false end
+	local tool = equipItem(gun)
+	if state.closed or player.Character ~= model or not tool or not targetPart.Parent then return false end
+	nextShot = os.clock() + math.max(0.15, tool.FireRate or 1)
+	if (tool.Ammo or 0) <= 0 then
+		tool:Reload()
+		state.status = "Reloading " .. gun.Name
+		return true
+	end
+	local head = model:FindFirstChild("Head") or root
+	local speed = tool.ProjectileSpeed or 350
+	local aim = targetPart.Position + targetPart.AssemblyLinearVelocity * math.min(0.4, distance / speed)
+	local delta = aim - head.Position
+	if delta.Magnitude > 0 then
+		state.status = "Defending against " .. target.Name
+		tool:Fire(Ray.new(head.Position, delta.Unit))
+	end
+	return true
+end
+local function prepareSupplies(model, root, generation)
+	if not Settings.AutoSupplies then return false end
+	local inventory = player:FindFirstChild("Inventory")
+	local items = workspace:FindFirstChild("Items")
+	if not inventory or not items then return false end
+	local hasGun, hasMedicine, hasLight = false, false, false
+	for _, item in ipairs(inventory:GetChildren()) do
+		if item:GetAttribute("ToolName") == "Firearm" then hasGun = true end
+		if item.Name == "Bandage" or item.Name == "MedKit" then hasMedicine = true end
+		if item.Name:find("Flashlight") then hasLight = true end
+	end
+	if hasGun and hasMedicine and hasLight then return false end
+	local range = math.max(80, (workspace:GetAttribute("MapRange") or 200) - 15)
+	local chosen, distance
+	for _, item in ipairs(items:GetChildren()) do
+		local wanted = not hasGun and item:GetAttribute("ToolName") == "Firearm"
+			or not hasMedicine and (item.Name == "Bandage" or item.Name == "MedKit")
+			or not hasLight and item.Name:find("Flashlight")
+		if wanted and item:IsA("Model") and item.PrimaryPart and os.clock() >= (cooldowns[item] or 0) then
+			local pos = item:GetPivot().Position
+			local delta = (pos * Vector3.new(1, 0, 1)).Magnitude
+			if delta < range and math.abs(pos.Y) < 100 and not mobNear(pos, Settings.MobDistance)
+				and (not distance or delta < distance) then chosen, distance = item, delta end
+		end
+	end
+	if chosen then
+		state.status = "Collecting safety supplies: " .. chosen.Name
+		update()
+		local pos = chosen:GetPivot().Position
+		move(root, pos + Vector3.new(0, 3, 0))
+		task.wait(0.45)
+		if active(generation, model) and (root.Position - pos).Magnitude < 15 then
+			remotes().RequestHotbarItem:InvokeServer(chosen)
+		end
+		cooldowns[chosen] = os.clock() + 30
+		if active(generation, model) then move(root, pos + Vector3.new(0, Settings.HoverHeight, 0)) end
+		return true
+	end
+	if os.clock() >= supplies.nextScan then
+		supplies.nextScan = os.clock() + 10
+		supplies.chests = {}
+		local map = workspace:FindFirstChild("Map")
+		local landmarks = map and map:FindFirstChild("Landmarks")
+		if landmarks then
+			for _, chest in ipairs(landmarks:GetDescendants()) do
+				if chest:IsA("Model") and chest:GetAttribute("Interaction") == "ItemChest"
+					and chest.Name:find("Item Chest") then table.insert(supplies.chests, chest) end
+			end
+		end
+	end
+	for _, chest in ipairs(supplies.chests) do
+		if chest.Parent and os.clock() >= (cooldowns[chest] or 0) and not chest:GetAttribute("Locked")
+			and not chest:GetAttribute(tostring(math.abs(player.UserId)) .. "Opened") then
+			local pos = chest:GetPivot().Position
+			if (pos * Vector3.new(1, 0, 1)).Magnitude < range and math.abs(pos.Y) < 100
+				and not mobNear(pos, Settings.MobDistance) then
+				state.status = "Opening a nearby supply chest"
+				move(root, pos + Vector3.new(0, 4, 0))
+				task.wait(0.45)
+				if active(generation, model) and (root.Position - pos).Magnitude < 15 then
+					remotes().RequestOpenItemChest:FireServer(chest)
+					task.wait(0.8)
+				end
+				cooldowns[chest] = math.huge
+				if active(generation, model) then move(root, pos + Vector3.new(0, Settings.HoverHeight, 0)) end
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function step()
+	state.picked, state.total = flowerProgress()
+	if player:GetAttribute("HollowBeaten") == true then
+		state.enabled = false
+		state.status = "Hollow quest complete: server confirmed"
+		return
+	end
+	local model, root, hum = character()
+	if not root then state.status = "Dead: waiting for revival or a fresh round"; return end
+	local gameClient = getClient()
+	if gameClient and gameClient.CutsceneModuleClient and gameClient.CutsceneModuleClient.IsCutsceneRunning() then
+		state.status = "Waiting for the game's cutscene"
+		return
+	end
+	if heal(model, root, hum) then return end
+	if not state.enabled then return end
+	if chooseUpgrade() then return end
+	if os.clock() < guard.untilTime then state.status = "Safety hover: waiting for mobs to move away"; return end
+	local generation = state.generation
+	if defend(model, root) then return end
+	if not player:GetAttribute("InHollowRun") and eatFood(model, root, generation) then return end
+	if player:GetAttribute("InHollowRun") then
+		if hum.Health <= Settings.LowHealth then safeLantern(); state.status = "Low health: paused at a safe lantern"; return end
+		collectFlower(model, root, generation)
+	elseif (workspace:GetAttribute("Progress") or 0) < 3 then
+		if not Settings.AutoFuel then state.status = "Upgrade the fire to level 3, then enter the void"; return end
+		if fuelFire(model, root, generation) == false then
+			if not Settings.AutoChop or not chopTree(model, root, generation) then
+				state.status = "No accessible fuel: bring logs to the fire"
+			end
+		end
+	elseif prepareSupplies(model, root, generation) then
+		return
+	elseif Settings.AutoEnterVoid then
+		if Settings.RequireSafetySupplies then
+			local medicine, gun = false, false
+			local inventory = player:FindFirstChild("Inventory")
+			if inventory then
+				for _, item in ipairs(inventory:GetChildren()) do
+					if item.Name == "Bandage" or item.Name == "MedKit" then medicine = true end
+					if item:GetAttribute("ToolName") == "Firearm" then gun = true end
+				end
+			end
+			if not medicine or not gun then
+				if (workspace:GetAttribute("Progress") or 0) < 5 then
+					if fuelFire(model, root, generation) == false then chopTree(model, root, generation) end
+				else
+					state.status = "Waiting for an accessible gun and bandage/medkit before entering"
+				end
+				return
+			end
+		end
+		enterVoid()
+	else
+		state.status = "Fire is ready: press ENTER VOID"
+	end
+end
+
+connect(autoButton.Activated, function() setEnabled(not state.enabled) end)
+connect(fuelButton.Activated, function() Settings.AutoFuel = not Settings.AutoFuel; update() end)
+connect(enterButton.Activated, function()
+	task.spawn(function() local ok, err = pcall(enterVoid); if not ok then state.status = tostring(err) end; update() end)
+end)
+connect(safeButton.Activated, function() setEnabled(false); safeLantern(); update() end)
+connect(hideButton.Activated, function() panel.Visible = false; showButton.Visible = true end)
+connect(showButton.Activated, function() panel.Visible = true; showButton.Visible = false end)
+connect(closeButton.Activated, close)
+connect(player.CharacterRemoving, function() state.generation = state.generation + 1; stopDragging(); releaseHover() end)
+connect(RunService.Heartbeat, function()
+	local _, root, hum = character()
+	if not root then return end
+	local gameClient = getClient()
+	if gameClient and gameClient.CutsceneModuleClient and gameClient.CutsceneModuleClient.IsCutsceneRunning() then releaseHover(); return end
+	if root.Anchored then return end
+	if guard.root ~= root then move(root, root.Position + Vector3.new(0, Settings.HoverHeight, 0)) end
+	if (root.Position - guard.force.Position).Magnitude > 250 then
+		guard.force.Position = root.Position + Vector3.new(0, 15, 0)
+		guard.untilTime = os.clock() + 1
+	end
+	local damaged = guard.lastHealth and hum.Health < guard.lastHealth
+	guard.lastHealth = hum.Health
+	local threat, mob = mobNear(root.Position, Settings.MobDistance)
+	if damaged or threat and os.clock() >= guard.untilTime then
+		state.generation = state.generation + 1
+		guard.untilTime = os.clock() + 2
+		stopDragging()
+		local escape = Vector3.zero
+		if mob then
+			local delta = (root.Position - mob:GetPivot().Position) * Vector3.new(1, 0, 1)
+			if delta.Magnitude > 0 then escape = delta.Unit * 45 end
+		end
+		local pos = root.Position + escape + Vector3.new(0, Settings.HoverHeight, 0)
+		if player:GetAttribute("InHollowRun") and root.Position.Y < -200 then pos = Vector3.new(pos.X, math.min(-240, pos.Y), pos.Z) end
+		move(root, pos)
+		state.status = "Mob or damage detected: retreating upward"
+	end
+end)
+connect(UserInputService.InputBegan, function(input, processed)
+	if not processed and input.KeyCode == Enum.KeyCode.F6 then setEnabled(not state.enabled) end
+end)
+do
+	local dragInput, dragStart, panelStart
+	local handle = make("Frame", {BackgroundTransparency = 1, Active = true,
+		Size = UDim2.new(1, 0, 0, 34)}, panel)
+	local function clampPanel()
+		local bounds = surface.AbsoluteSize
+		if bounds.X <= 0 or bounds.Y <= 0 then return end
+		scale.Scale = math.min(1, (bounds.X - 16) / 290, (bounds.Y - 16) / 260)
+		local absolute = panel.AbsolutePosition - surface.AbsolutePosition
+		panel.Position = UDim2.fromOffset(math.clamp(absolute.X, 8, math.max(8, bounds.X - 290 * scale.Scale - 8)),
+			math.clamp(absolute.Y, 8, math.max(8, bounds.Y - 260 * scale.Scale - 8)))
+	end
+	connect(handle.InputBegan, function(input)
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragInput, dragStart, panelStart = input, Vector2.new(input.Position.X, input.Position.Y), panel.Position
+		end
+	end)
+	connect(UserInputService.InputChanged, function(input)
+		if not dragInput then return end
+		if input ~= dragInput and input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+		local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+		panel.Position = UDim2.fromOffset(panelStart.X.Offset + delta.X, panelStart.Y.Offset + delta.Y)
+		clampPanel()
+	end)
+	connect(UserInputService.InputEnded, function(input)
+		if input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1 then dragInput = nil end
+	end)
+	connect(UserInputService.WindowFocusReleased, function() dragInput = nil end)
+	connect(surface:GetPropertyChangedSignal("AbsoluteSize"), clampPanel)
+	clampPanel()
+end
+update()
+worker = task.spawn(function()
+	while not state.closed do
+		local ok, err = pcall(step)
+		if not ok then state.status = "Action failed: " .. tostring(err); stopDragging() end
+		update()
+		task.wait(0.15)
+	end
+end)
