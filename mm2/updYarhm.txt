@@ -6167,6 +6167,32 @@ local function XEEC_routine() -- Routine: StarterGui.YARHM.Murder Mystery 2
 	
 	table.insert(module, {
 		Type = "Text",
+		Args = {"Round fling and join user"}
+	})
+	table.insert(module, {
+		Type = "Input",
+		Args = {"Round fling target username", "Set target", function(_, username)
+			local controls = getgenv().YARHM_roundFling
+			if controls then controls.select(username) else fu.notification("Round fling controls are still loading.") end
+		end}
+	})
+	table.insert(module, {
+		Type = "Button",
+		Args = {"Toggle loop fling each round", function()
+			local controls = getgenv().YARHM_roundFling
+			if not controls then fu.notification("Round fling controls are still loading."); return end
+			controls.setEnabled(not controls.enabled)
+		end}
+	})
+	table.insert(module, {
+		Type = "Input",
+		Args = {"Join someone by Roblox username", "Join server", function(_, username)
+			local join = getgenv().YARHM_joinUser
+			if join then join(username) else fu.notification("Join controls are still loading.") end
+		end}
+	})
+	table.insert(module, {
+		Type = "Text",
 		Args = {"ESPs"}
 	})
 	
@@ -9103,6 +9129,31 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	function roundFling.cancel()
 		roundFling.pending = false
 	end
+	function roundFling.select(username)
+		username = tostring(username or ""):match("^%s*(.-)%s*$"):gsub("^@", ""):lower()
+		for _, player in ipairs(game.Players:GetPlayers()) do
+			if player.Name:lower() == username and player ~= game.Players.LocalPlayer and username ~= "nashadowman" then
+				roundFling.cancel()
+				roundFling.userId = player.UserId
+				if roundFling.update then roundFling.update() end
+				getNotify()("Round fling target: @" .. player.Name .. ". Loop is " .. (roundFling.enabled and "ON." or "OFF."))
+				return
+			end
+		end
+		getNotify()("Enter another player's exact username from this server.")
+	end
+	function roundFling.setEnabled(enabled)
+		if enabled then
+			if not roundFling.userId then getNotify()("Set a round fling target first."); return end
+			local event = gameplay and gameplay:FindFirstChild("RoundStart")
+			if not event or not event:IsA("RemoteEvent") then getNotify()("Round-start event unavailable."); return end
+		end
+		roundFling.enabled = enabled
+		roundFling.cancel()
+		if roundFling.update then roundFling.update() end
+		getNotify()(enabled and "Round fling enabled for the next round." or "Round fling disabled.")
+	end
+	getgenv().YARHM_roundFling = roundFling
 	if gameplay then
 		local startEvent = gameplay:FindFirstChild("RoundStart")
 		local endEvent = gameplay:FindFirstChild("RoundEndFade")
@@ -9453,10 +9504,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			button.Parent = list
 			entries[player.UserId] = button
 			AineRuntime.connect(button.Activated, function()
-				roundFling.cancel()
-				roundFling.userId = player.UserId
-				roundFling.update()
-				getNotify()("Round fling target: @" .. player.Name .. ". Enable the loop to start next round.")
+				roundFling.select(player.Name)
 			end)
 			roundFling.update()
 		end
@@ -9472,13 +9520,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			end
 		end)
 		AineRuntime.connect(toggle.Activated, function()
-			if not roundFling.userId then getNotify()("Select a player from the list first."); return end
-			local event = gameplay and gameplay:FindFirstChild("RoundStart")
-			if not event or not event:IsA("RemoteEvent") then getNotify()("Round-start event unavailable."); return end
-			roundFling.enabled = not roundFling.enabled
-			roundFling.cancel()
-			roundFling.update()
-			getNotify()(roundFling.enabled and "Round fling enabled for the next round." or "Round fling disabled.")
+			roundFling.setEnabled(not roundFling.enabled)
 		end)
 		roundFling.update()
 	end
@@ -9583,6 +9625,13 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 			if not ok then teleportPending = false end
 			submit.Text = "Join server"
 			status.Text = ok and message or "Join failed. The server may be full, private, or unavailable."
+			getNotify()(status.Text)
+		end
+		getgenv().YARHM_joinUser = function(username)
+			if busy then getNotify()("A username lookup is already running."); return end
+			input.Text = username
+			if not username:match("%S") then getNotify()("Enter a Roblox username."); return end
+			join()
 		end
 		AineRuntime.connect(submit.Activated, join)
 		AineRuntime.connect(input.FocusLost, function(enterPressed) if enterPressed then join() end end)
