@@ -9098,6 +9098,50 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		if not ok then getNotify()("Fling failed: " .. tostring(err)) end
 	end
 
+	local autoGrabBusy = false
+	local roundFling = {enabled = false, userId = nil, pending = false, deadline = 0}
+	function roundFling.cancel()
+		roundFling.pending = false
+	end
+	if gameplay then
+		local startEvent = gameplay:FindFirstChild("RoundStart")
+		local endEvent = gameplay:FindFirstChild("RoundEndFade")
+		if startEvent and startEvent:IsA("RemoteEvent") then
+			AineRuntime.connect(startEvent.OnClientEvent, function()
+				roundFling.pending = roundFling.enabled and roundFling.userId ~= nil
+				roundFling.deadline = tick() + 30
+			end)
+		end
+		if endEvent and endEvent:IsA("RemoteEvent") then
+			AineRuntime.connect(endEvent.OnClientEvent, roundFling.cancel)
+		end
+	end
+	AineRuntime.connect(rs2.Heartbeat, function()
+		if not roundFling.pending then return end
+		if not roundFling.enabled or tick() > roundFling.deadline then roundFling.cancel(); return end
+		local players = game:GetService("Players")
+		local target = players:GetPlayerByUserId(roundFling.userId)
+		local lp = players.LocalPlayer
+		local alive = getgenv and getgenv().YARHM_isAliveInRound
+		local helper = getgenv and getgenv().YARHM_miniFling
+		local function ready(player)
+			local character = player and player.Character
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			return humanoid and humanoid.Health > 0 and root and alive and alive(player)
+		end
+		if flingBusy or farmCombat.busy or teleportShotBusy or autoGrabBusy
+			or not helper or not ready(lp) or not ready(target) then return end
+		roundFling.cancel()
+		flingBusy = true
+		local ok, err = pcall(function()
+			releaseFarm(true)
+			flingTarget(target, true)
+		end)
+		flingBusy = false
+		if not ok then getNotify()("Round fling failed: " .. tostring(err)) end
+	end)
+
 	local lastKillAll = 0
 	local function onKillAllClick()
 		if tick() - lastKillAll < 0.5 then return end
@@ -9154,7 +9198,6 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	end
 
 	local autoGrab = false
-	local autoGrabBusy = false
 	local autoGrabElapsed = 0
 	local autoGrabConnection = AineRuntime.connect(rs2.Heartbeat, function(dt)
 		autoGrabElapsed = autoGrabElapsed + dt
@@ -9341,7 +9384,7 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	flingPopup.Name = "FlingOptionsPopup"
 	flingPopup.BackgroundTransparency = 1
 	flingPopup.Position = UDim2.new(0, 160, 0, 60)
-	flingPopup.Size = UDim2.fromOffset(166, 60)
+	flingPopup.Size = UDim2.fromOffset(166, 250)
 	flingPopup.Visible = false
 	flingPopup.ZIndex = 1000
 	flingPopup.Parent = screenGui
@@ -9363,9 +9406,202 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 	addFlingOption("Murd", Color3.fromRGB(197, 0, 0), 0, false, false)
 	addFlingOption("Sheriff", Color3.fromRGB(0, 100, 220), 1, true, false)
 	addFlingOption("Innocent", Color3.fromRGB(0, 160, 85), 2, false, true)
+	do
+		local toggle = Instance.new("TextButton")
+		toggle.Name = "RoundFlingToggle"
+		toggle.Position = UDim2.fromOffset(0, 62)
+		toggle.Size = UDim2.fromOffset(166, 34)
+		toggle.Font = Enum.Font.GothamBold
+		toggle.TextSize = 13
+		toggle.TextColor3 = Color3.new(1, 1, 1)
+		toggle.ZIndex = 1001
+		toggle.Parent = flingPopup
+		Instance.new("UICorner", toggle).CornerRadius = UDim.new(0, 8)
+		local list = Instance.new("ScrollingFrame")
+		list.Name = "RoundFlingPlayers"
+		list.Position = UDim2.fromOffset(0, 100)
+		list.Size = UDim2.fromOffset(166, 150)
+		list.BackgroundColor3 = Color3.fromRGB(31, 31, 31)
+		list.BorderSizePixel = 0
+		list.ScrollBarThickness = 4
+		list.CanvasSize = UDim2.new()
+		list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		list.ZIndex = 1001
+		list.Parent = flingPopup
+		local layout = Instance.new("UIListLayout", list)
+		layout.Padding = UDim.new(0, 3)
+		layout.SortOrder = Enum.SortOrder.Name
+		local entries = {}
+		function roundFling.update()
+			toggle.Text = roundFling.enabled and "Loop each round: ON" or "Loop each round: OFF"
+			toggle.BackgroundColor3 = roundFling.enabled and Color3.fromRGB(0, 160, 85) or Color3.fromRGB(65, 65, 65)
+			for userId, button in pairs(entries) do
+				button.BackgroundColor3 = userId == roundFling.userId and Color3.fromRGB(170, 75, 0) or Color3.fromRGB(45, 45, 45)
+			end
+		end
+		local function addPlayer(player)
+			if player == game.Players.LocalPlayer or string.lower(player.Name) == "nashadowman" then return end
+			local button = Instance.new("TextButton")
+			button.Name = player.Name
+			button.Size = UDim2.new(1, -6, 0, 34)
+			button.Font = Enum.Font.Gotham
+			button.TextSize = 12
+			button.TextColor3 = Color3.new(1, 1, 1)
+			button.Text = player.DisplayName .. " (@" .. player.Name .. ")"
+			button.TextTruncate = Enum.TextTruncate.AtEnd
+			button.ZIndex = 1002
+			button.Parent = list
+			entries[player.UserId] = button
+			AineRuntime.connect(button.Activated, function()
+				roundFling.cancel()
+				roundFling.userId = player.UserId
+				roundFling.update()
+				getNotify()("Round fling target: @" .. player.Name .. ". Enable the loop to start next round.")
+			end)
+			roundFling.update()
+		end
+		for _, player in ipairs(game.Players:GetPlayers()) do addPlayer(player) end
+		AineRuntime.connect(game.Players.PlayerAdded, addPlayer)
+		AineRuntime.connect(game.Players.PlayerRemoving, function(player)
+			if entries[player.UserId] then entries[player.UserId]:Destroy(); entries[player.UserId] = nil end
+			if roundFling.userId == player.UserId then
+				roundFling.enabled, roundFling.userId = false, nil
+				roundFling.cancel()
+				roundFling.update()
+				getNotify()("Round fling disabled: target left the server.")
+			end
+		end)
+		AineRuntime.connect(toggle.Activated, function()
+			if not roundFling.userId then getNotify()("Select a player from the list first."); return end
+			local event = gameplay and gameplay:FindFirstChild("RoundStart")
+			if not event or not event:IsA("RemoteEvent") then getNotify()("Round-start event unavailable."); return end
+			roundFling.enabled = not roundFling.enabled
+			roundFling.cancel()
+			roundFling.update()
+			getNotify()(roundFling.enabled and "Round fling enabled for the next round." or "Round fling disabled.")
+		end)
+		roundFling.update()
+	end
 	AineRuntime.connect(flingBtn.Activated, function()
 		flingPopup.Visible = not flingPopup.Visible
 	end)
+	local joinUser = {}
+	do
+		joinUser.button, joinUser.scale = makeQuickButton("JoinUserQuickBtn", "Join\nUser",
+			Color3.fromRGB(75, 80, 180), UDim2.fromOffset(90, 130), Vector2.zero, UDim2.fromOffset(60, 60))
+		local panel = Instance.new("Frame")
+		panel.Name = "JoinUserPanel"
+		panel.Position = UDim2.fromOffset(160, 130)
+		panel.Size = UDim2.fromOffset(220, 125)
+		panel.BackgroundColor3 = Color3.fromRGB(31, 31, 31)
+		panel.BorderSizePixel = 0
+		panel.Visible = false
+		panel.ZIndex = 1003
+		panel.Parent = screenGui
+		joinUser.panel = panel
+		Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
+		local input = Instance.new("TextBox")
+		input.Name = "JoinUsername"
+		input.Position = UDim2.fromOffset(8, 8)
+		input.Size = UDim2.new(1, -16, 0, 32)
+		input.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+		input.Font = Enum.Font.Gotham
+		input.TextSize = 14
+		input.TextColor3 = Color3.new(1, 1, 1)
+		input.PlaceholderText = "Roblox username (not display name)"
+		input.PlaceholderColor3 = Color3.fromRGB(180, 180, 180)
+		input.Text = ""
+		input.ClearTextOnFocus = false
+		input.ZIndex = 1004
+		input.Parent = panel
+		local submit = Instance.new("TextButton")
+		submit.Name = "JoinUsernameSubmit"
+		submit.Position = UDim2.fromOffset(8, 46)
+		submit.Size = UDim2.new(1, -16, 0, 30)
+		submit.BackgroundColor3 = Color3.fromRGB(75, 80, 180)
+		submit.Font = Enum.Font.GothamBold
+		submit.TextSize = 14
+		submit.TextColor3 = Color3.new(1, 1, 1)
+		submit.Text = "Join server"
+		submit.ZIndex = 1004
+		submit.Parent = panel
+		local status = Instance.new("TextLabel")
+		status.Position = UDim2.fromOffset(8, 80)
+		status.Size = UDim2.new(1, -16, 0, 38)
+		status.BackgroundTransparency = 1
+		status.Font = Enum.Font.Gotham
+		status.TextSize = 12
+		status.TextColor3 = Color3.fromRGB(220, 220, 220)
+		status.TextWrapped = true
+		status.Text = "Requires a visible, joinable server."
+		status.ZIndex = 1004
+		status.Parent = panel
+		local busy, teleportPending = false, false
+		local teleportService = game:GetService("TeleportService")
+		local function join()
+			if busy then return end
+			local username = input.Text:match("^%s*(.-)%s*$"):gsub("^@", "")
+			if username == "" then status.Text = "Enter a Roblox username."; return end
+			busy = true
+			submit.Text, status.Text = "Looking up...", "Finding @" .. username .. "..."
+			local ok, message = pcall(function()
+				local players = game:GetService("Players")
+				local resolved, userId = pcall(function() return players:GetUserIdFromNameAsync(username) end)
+				if not resolved then return "Username lookup failed. Check the username and retry." end
+				if players:GetPlayerByUserId(userId) then return "That player is already in this server." end
+				local placeId, instanceId
+				local friendsOk, friends = pcall(function() return players.LocalPlayer:GetFriendsOnline(200) end)
+				if friendsOk then
+					for _, friend in ipairs(friends) do
+						if tonumber(friend.VisitorId) == userId and friend.IsOnline then
+							placeId, instanceId = tonumber(friend.PlaceId), friend.GameId
+							break
+						end
+					end
+				end
+				if not placeId or type(instanceId) ~= "string" or instanceId == "" then
+					local send = (syn and syn.request) or (http and http.request) or http_request or request
+					if type(send) ~= "function" then return "Server lookup needs HTTP request support or a joinable online friend." end
+					local json = game:GetService("HttpService")
+					local response = send({Url = "https://presence.roblox.com/v1/presence/users", Method = "POST",
+						Headers = {["Content-Type"] = "application/json"}, Body = json:JSONEncode({userIds = {userId}})})
+					if not response or response.StatusCode ~= 200 then return "Presence lookup failed. Try again later." end
+					local data = json:JSONDecode(response.Body)
+					local presence = data and data.userPresences and data.userPresences[1]
+					if not presence or presence.userPresenceType ~= 2 then return "That player is offline or not in a joinable game." end
+					placeId, instanceId = tonumber(presence.placeId), presence.gameId
+				end
+				if not placeId or placeId <= 0 or type(instanceId) ~= "string" or instanceId == "" then
+					return "Server unavailable or hidden by privacy settings."
+				end
+				if placeId == game.PlaceId and instanceId == game.JobId then return "That player is already in this server." end
+				teleportPending = true
+				teleportService:TeleportToPlaceInstance(placeId, instanceId, players.LocalPlayer)
+				return "Joining @" .. username .. "..."
+			end)
+			busy = false
+			if not ok then teleportPending = false end
+			submit.Text = "Join server"
+			status.Text = ok and message or "Join failed. The server may be full, private, or unavailable."
+		end
+		AineRuntime.connect(submit.Activated, join)
+		AineRuntime.connect(input.FocusLost, function(enterPressed) if enterPressed then join() end end)
+		AineRuntime.connect(teleportService.TeleportInitFailed, function(player, _, message)
+			if player == game.Players.LocalPlayer and teleportPending then
+				teleportPending = false
+				status.Text = "Join failed: " .. tostring(message)
+			end
+		end)
+		AineRuntime.connect(joinUser.button.Activated, function()
+			panel.Visible = not panel.Visible
+			if panel.Visible then flingPopup.Visible = false end
+		end)
+		AineRuntime.connect(flingBtn.Activated, function() panel.Visible = false end)
+		AineRuntime.connect(joinUser.button:GetPropertyChangedSignal("Visible"), function()
+			if not joinUser.button.Visible then panel.Visible = false end
+		end)
+		AineRuntime.connect(joinUser.button.Destroying, function() panel:Destroy() end)
+	end
 	AineRuntime.connect(flingBtn:GetPropertyChangedSignal("Visible"), function()
 		if not flingBtn.Visible then flingPopup.Visible = false end
 	end)
@@ -9379,12 +9615,15 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 
 	AineRuntime.onClose(function()
 		autoGrab = false
+		roundFling.enabled = false
+		roundFling.cancel()
 		farmEnabled = false
 		resetFarmCombat()
 		releaseFarm(true)
 		if noclipConn then noclipConn:Disconnect() end
 		if antiFlingConn then antiFlingConn:Disconnect() end
 		flingPopup.Visible = false
+		joinUser.panel.Visible = false
 	end)
 	local fullCloseButton = Instance.new("TextButton")
 	fullCloseButton.Name = "FullCloseButton"
@@ -9409,10 +9648,11 @@ local function AIIGMH_routine() -- Routine: StarterGui.YARHM.Menu.CloseArea.Clos
 		local shouldShow = (OpenerDraggable == true) or (menu.CanvasGroup and menu.CanvasGroup.Visible == true)
 		if shouldShow ~= _quickBtnsVisible then
 			_quickBtnsVisible = shouldShow
-			if not shouldShow then flingPopup.Visible = false end
+			if not shouldShow then flingPopup.Visible = false; joinUser.panel.Visible = false end
 			local btns = {
 				{btn = grabGunBtn, sc = grabGunScale},
 				{btn = flingBtn, sc = flingScale},
+				{btn = joinUser.button, sc = joinUser.scale},
 				{btn = killAllBtn, sc = killAllScale},
 				{btn = noclipSwitch, sc = noclipScale},
 				{btn = flySwitch, sc = flyScale},
