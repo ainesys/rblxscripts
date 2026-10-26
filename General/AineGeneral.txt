@@ -4,6 +4,7 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Stats = game:GetService("Stats")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local previous = playerGui:FindFirstChild("AineGeneral")
@@ -16,9 +17,11 @@ local connections, collisionState, espObjects = {}, {}, {}
 local closed, minimized = false, false
 local antiFling, noclip, esp = false, false, false
 local fly, flight = false, nil
+local aimTarget, aimLocked, aimExpanded = nil, false, false
+local aimFrameTime, aimPing, nextAimReacquire, nextAimPing = 1 / 60, 0.08, 0, 0
 local savedTP, tpGesture, tpFlashUntil = nil, nil, 0
 local burst, nextBurst, espElapsed = nil, 0, 0
-local tpRow, flingRow
+local tpRow, flingRow, aimPanel, aimBody, aimHeader, aimInput, aimStatus, aimLockButton
 local function connect(signal, callback)
 	local connection = signal:Connect(callback)
 	table.insert(connections, connection)
@@ -172,6 +175,220 @@ local function characterParts(who)
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if humanoid and root and humanoid.Health > 0 then return character, humanoid, root end
 end
+local function modelAimPart(model)
+	local humanoid = model and model:FindFirstChildOfClass("Humanoid")
+	local root = model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart)
+	if humanoid and root and humanoid.Health > 0 then
+		return model:FindFirstChild("Head") or root, humanoid, model
+	end
+end
+local function aimPart(target)
+	if not target then return end
+	if target.player then
+		local character, humanoid, root = characterParts(target.player)
+		if character then return character:FindFirstChild("Head") or root, humanoid, character end
+	elseif target.model and target.model:IsDescendantOf(workspace) then
+		return modelAimPart(target.model)
+	end
+end
+
+-- Compact, universal camera aim lock. Weapon-specific remote rewriting ("silent
+-- aim") differs between games, so this stays compatible by controlling the camera.
+aimPanel = make("Frame", {
+	Name = "AimLock", BackgroundColor3 = colors.panel, BorderSizePixel = 0,
+	Position = UDim2.fromOffset(8, 48), Size = UDim2.fromOffset(220, 34),
+	ClipsDescendants = true, ZIndex = 20,
+}, surface)
+round(aimPanel, 9)
+make("UIStroke", {Color = colors.off, Thickness = 1}, aimPanel)
+aimHeader = button(aimPanel, "AIM LOCK  ▼", UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 34))
+aimHeader.Name = "AimDropdown"
+aimHeader.BackgroundColor3 = colors.panel
+aimHeader.TextSize = 12
+aimHeader.ZIndex = 22
+aimBody = make("Frame", {
+	Name = "Contents", BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 34),
+	Size = UDim2.new(1, 0, 0, 120), Visible = false, ZIndex = 21,
+}, aimPanel)
+aimInput = make("TextBox", {
+	Name = "Username", BackgroundColor3 = colors.field, BorderSizePixel = 0,
+	Position = UDim2.fromOffset(8, 8), Size = UDim2.new(1, -16, 0, 30),
+	Text = "", PlaceholderText = "Username (blank = look target)", ClearTextOnFocus = false,
+	Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = colors.text,
+	PlaceholderColor3 = colors.muted, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 22,
+}, aimBody)
+make("UIPadding", {PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, aimInput)
+round(aimInput, 7)
+local aimLookButton = button(aimBody, "LOCK LOOK", UDim2.fromOffset(8, 46), UDim2.fromOffset(98, 30))
+aimLookButton.TextSize = 10
+aimLookButton.ZIndex = 22
+aimLockButton = button(aimBody, "LOCK", UDim2.new(1, -106, 0, 46), UDim2.fromOffset(98, 30))
+aimLockButton.TextSize = 10
+aimLockButton.ZIndex = 22
+aimStatus = label(aimBody, "Prediction: ping + FPS", UDim2.fromOffset(8, 82), UDim2.new(1, -16, 0, 28), 10)
+aimStatus.TextColor3 = colors.muted
+aimStatus.TextTruncate = Enum.TextTruncate.AtEnd
+aimStatus.ZIndex = 22
+
+local function targetLabel(target)
+	if not target then return "target" end
+	return target.player and target.player.Name or target.name
+end
+local function paintAim()
+	aimLockButton.Text = aimLocked and "UNLOCK" or "LOCK"
+	aimLockButton.BackgroundColor3 = aimLocked and colors.accent or colors.off
+	aimLockButton.TextColor3 = aimLocked and colors.panel or colors.text
+	aimHeader.Text = (aimLocked and "AIM: " .. targetLabel(aimTarget) or "AIM LOCK")
+		.. (aimExpanded and "  ▲" or "  ▼")
+end
+local function setAimTarget(target, lockNow)
+	aimTarget = target
+	aimLocked = target ~= nil and lockNow == true
+	nextAimReacquire = 0
+	if target then
+		if target.player then aimInput.Text = "@" .. target.player.Name else aimInput.Text = "" end
+		aimStatus.Text = (aimLocked and "Locked: " or "Selected: ") .. targetLabel(target)
+	else
+		aimStatus.Text = "No target selected"
+	end
+	paintAim()
+	return target ~= nil
+end
+local function visibleFromCamera(camera, model, part)
+	local character = player.Character
+	local parameters = RaycastParams.new()
+	parameters.FilterType = Enum.RaycastFilterType.Exclude
+	parameters.FilterDescendantsInstances = character and {character} or {}
+	parameters.IgnoreWater = true
+	local origin = camera.CFrame.Position
+	local hit = workspace:Raycast(origin, part.Position - origin, parameters)
+	return not hit or hit.Instance:IsDescendantOf(model)
+end
+local function targetInView()
+	local camera = workspace.CurrentCamera
+	if not camera then return nil, "Camera unavailable" end
+	local center = camera.ViewportSize / 2
+	local radius = math.max(90, math.min(camera.ViewportSize.X, camera.ViewportSize.Y) * 0.22)
+	local best, bestDistance
+	for _, model in ipairs(workspace:GetDescendants()) do
+		if model:IsA("Model") and model ~= player.Character then
+			local part, _, character = modelAimPart(model)
+			if part then
+				local owner = Players:GetPlayerFromCharacter(character)
+				local point, onScreen = camera:WorldToViewportPoint(part.Position)
+				if onScreen and point.Z > 0 then
+					local distance = (Vector2.new(point.X, point.Y) - center).Magnitude
+					if distance <= radius and (not bestDistance or distance < bestDistance)
+						and visibleFromCamera(camera, character, part) then
+						bestDistance = distance
+						best = owner and {player = owner, name = owner.Name}
+							or {model = character, name = character.Name}
+					end
+				end
+			end
+		end
+	end
+	return best, best and nil or "Put a visible target near screen center"
+end
+local function chooseAimFromInput(lockNow)
+	local target, message
+	if aimInput.Text:match("^%s*$") then
+		target, message = targetInView()
+	else
+		local who
+		who, message = resolve(aimInput.Text)
+		if who then target = {player = who, name = who.Name} end
+	end
+	if not target then aimStatus.Text = message; return end
+	setAimTarget(target, lockNow)
+end
+connect(aimHeader.Activated, function()
+	aimExpanded = not aimExpanded
+	aimBody.Visible = aimExpanded
+	aimPanel.Size = UDim2.fromOffset(220, aimExpanded and 154 or 34)
+	paintAim()
+end)
+connect(aimLookButton.Activated, function()
+	local target, message = targetInView()
+	if target then setAimTarget(target, true) else aimStatus.Text = message end
+end)
+connect(aimLockButton.Activated, function()
+	if aimLocked then
+		aimLocked = false
+		aimStatus.Text = aimTarget and ("Selected: " .. targetLabel(aimTarget)) or "Unlocked"
+		paintAim()
+	elseif aimTarget and not aimTarget.player and aimInput.Text:match("^%s*$") then
+		setAimTarget(aimTarget, true)
+	else
+		chooseAimFromInput(true)
+	end
+end)
+connect(aimInput.FocusLost, function(enterPressed)
+	if enterPressed then chooseAimFromInput(true) end
+end)
+local function reacquireAimModel()
+	if not aimTarget or aimTarget.player then return end
+	local best, bestDistance
+	for _, candidate in ipairs(workspace:GetDescendants()) do
+		if candidate:IsA("Model") and candidate.Name == aimTarget.name then
+			local part = modelAimPart(candidate)
+			if part then
+				local distance = aimTarget.lastPosition and (part.Position - aimTarget.lastPosition).Magnitude or 0
+				if not bestDistance or distance < bestDistance then
+					best, bestDistance = candidate, distance
+				end
+			end
+		end
+	end
+	if best then
+		aimTarget.model = best
+		aimStatus.Text = "Reacquired: " .. aimTarget.name
+	end
+end
+local function updateAim(dt)
+	aimFrameTime = aimFrameTime * 0.9 + math.min(dt, 0.1) * 0.1
+	if not aimLocked or not aimTarget then return end
+	local camera = workspace.CurrentCamera
+	if not camera then return end
+	local part = aimPart(aimTarget)
+	if not part then
+		if not aimTarget.player and os.clock() >= nextAimReacquire then
+			nextAimReacquire = os.clock() + 0.5
+			reacquireAimModel()
+			part = aimPart(aimTarget)
+		end
+		if not part then
+			aimStatus.Text = "Waiting for " .. targetLabel(aimTarget) .. " to return"
+			return
+		end
+	end
+	aimTarget.lastPosition = part.Position
+	if os.clock() >= nextAimPing then
+		nextAimPing = os.clock() + 1
+		pcall(function()
+			local item = Stats.Network.ServerStatsItem["Data Ping"]
+			local milliseconds = item and item:GetValue()
+			if type(milliseconds) == "number" then aimPing = math.clamp(milliseconds / 1000, 0, 0.6) end
+		end)
+		aimStatus.Text = string.format("Locked: %s  %dms / %dfps",
+			targetLabel(aimTarget), math.floor(aimPing * 1000 + 0.5),
+			math.floor(1 / math.max(aimFrameTime, 1 / 240) + 0.5))
+	end
+	local velocity = part.AssemblyLinearVelocity
+	if velocity.Magnitude > 180 then velocity = velocity.Unit * 180 end
+	local leadTime = math.clamp(aimPing * 0.5 + aimFrameTime * 1.5, 0.02, 0.35)
+	local predicted = part.Position + velocity * leadTime
+	camera.CFrame = CFrame.lookAt(camera.CFrame.Position, predicted, camera.CFrame.UpVector)
+end
+RunService:BindToRenderStep("AineGeneralAim", Enum.RenderPriority.Camera.Value + 1, function(dt)
+	if closed then return end
+	local ok, message = pcall(updateAim, dt)
+	if not ok then
+		aimLocked = false
+		aimStatus.Text = "Aim error: " .. tostring(message)
+		paintAim()
+	end
+end)
 local function stopMotion(root)
 	if root and root.Parent then
 		root.AssemblyLinearVelocity = Vector3.zero
@@ -496,6 +713,7 @@ local function cleanup()
 	if closed then return end
 	closed = true
 	tpGesture = nil
+	RunService:UnbindFromRenderStep("AineGeneralAim")
 	for _, connection in ipairs(connections) do connection:Disconnect() end
 	finishBurst()
 	stopFlight()
@@ -511,17 +729,22 @@ connect(minimize.Activated, function()
 	minimized = not minimized
 	left.Visible = not minimized
 	right.Visible = not minimized
+	aimPanel.Visible = not minimized
 	minimize.Text = minimized and "Show" or "Hide"
 end)
 local function layout()
 	local width = surface.AbsoluteSize.X
 	left.Size = UDim2.fromOffset(math.min(210, math.max(140, width - 140)), 134)
-	left.Position = UDim2.fromOffset(20, width < 440 and 144 or 60)
+	left.Position = UDim2.fromOffset(20, width < 440 and 144 or 94)
 end
 connect(surface:GetPropertyChangedSignal("AbsoluteSize"), layout)
 layout()
 connect(Players.PlayerRemoving, function(who)
 	removeESP(who)
+	if aimTarget and aimTarget.player == who then
+		setAimTarget(nil, false)
+		aimStatus.Text = "Player left the server"
+	end
 	for _, row in ipairs({tpRow, flingRow}) do
 		if row.target == who then setRow(row, false); row.status.Text = "Player left the server" end
 	end
