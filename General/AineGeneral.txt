@@ -650,7 +650,9 @@ local function startBurst(target, character, humanoid, root)
 	local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
 	local targetRoot = targetCharacter and (targetHumanoid and targetHumanoid.RootPart
 		or targetCharacter:FindFirstChild("HumanoidRootPart"))
-	local targetPart = targetCharacter and (targetCharacter:FindFirstChild("Head") or targetRoot)
+	local accessory = targetCharacter and targetCharacter:FindFirstChildOfClass("Accessory")
+	local handle = accessory and accessory:FindFirstChild("Handle")
+	local targetPart = targetCharacter and (targetCharacter:FindFirstChild("Head") or targetRoot or handle)
 	burst = {
 		target = target, targetCharacter = targetCharacter, targetPart = targetPart,
 		character = character, humanoid = humanoid, root = root, origin = root.CFrame,
@@ -669,31 +671,35 @@ local function physicsStep()
 	local character, humanoid, root = characterParts(player)
 	if burst then
 		local targetCharacter, targetHumanoid, targetRoot = characterParts(burst.target)
-		local targetPart = targetCharacter and (targetCharacter:FindFirstChild("Head") or targetRoot)
+		local accessory = targetCharacter and targetCharacter:FindFirstChildOfClass("Accessory")
+		local handle = accessory and accessory:FindFirstChild("Handle")
+		local targetPart = targetCharacter and (targetCharacter:FindFirstChild("Head") or targetRoot or handle)
 		if not flingRow.enabled or not root or root ~= burst.root or not targetRoot or not targetPart
 			or burst.target.Parent ~= Players or burst.target.Character ~= burst.targetCharacter
 			or targetHumanoid.Sit or os.clock() - burst.started >= 2 then
 			finishBurst()
 		else
-			-- Match mm2's working fling cycle: alternate several contact points
-			-- around the target while forcing both linear and angular velocity.
+			-- Use the same contact cycle as mm2. Pivoting the whole character is
+			-- more reliable than moving only HumanoidRootPart in networked games.
 			burst.phase = burst.phase + 1
 			local phase = burst.phase
-			local offsets = {
-				Vector3.new(0, 1.5, 0), Vector3.new(0, -1.5, 0),
-				Vector3.new(2.25, 1.5, -2.25), Vector3.new(-2.25, -1.5, 2.25),
-				Vector3.new(0, 1.5, 0), Vector3.new(0, -1.5, 0),
-			}
-			local velocity = targetRoot.AssemblyLinearVelocity
+			local velocity = targetPart.Velocity
 			if velocity.Magnitude < 50 then
-				local lead = targetHumanoid.MoveDirection * math.min(velocity.Magnitude / 1.25, 8)
+				local lead = targetHumanoid.MoveDirection * velocity.Magnitude / 1.25
+				local offsets = {
+					Vector3.new(0, 1.5, 0), Vector3.new(0, -1.5, 0),
+					Vector3.new(2.25, 1.5, -2.25), Vector3.new(-2.25, -1.5, 2.25),
+					Vector3.new(0, 1.5, 0), Vector3.new(0, -1.5, 0),
+				}
 				local offset = offsets[(phase - 1) % #offsets + 1]
-				root.CFrame = CFrame.new(targetPart.Position + offset + lead)
+				local pivot = CFrame.new(targetPart.Position + offset + lead)
 					* CFrame.Angles(math.rad(phase * 100), 0, 0)
+				character:PivotTo(pivot)
 			else
 				local offset = Vector3.new(0, phase % 2 == 0 and 1.5 or -1.5, targetHumanoid.WalkSpeed)
-				root.CFrame = CFrame.new(targetPart.Position + offset)
+				local pivot = CFrame.new(targetPart.Position + offset)
 					* CFrame.Angles(math.rad(90), 0, 0)
+				character:PivotTo(pivot)
 			end
 			root.Velocity = Vector3.new(9e7, 9e8, 9e7)
 			root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
