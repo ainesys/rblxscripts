@@ -460,8 +460,11 @@ local function finishBurst()
 		active.humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, active.seated)
 		active.humanoid.AutoRotate = active.autoRotate
 	end
+	if active.camera and active.camera.Parent and active.cameraSubject then
+		active.camera.CameraSubject = active.cameraSubject
+	end
 	if player.Character == active.character and active.root.Parent then
-		active.root.CFrame = active.origin
+		active.character:PivotTo(active.origin * CFrame.new(0, 0.5, 0))
 		stopMotion(active.root)
 		if active.humanoid.Health > 0 then active.humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end
 	end
@@ -656,7 +659,9 @@ local function startBurst(target, character, humanoid, root)
 	burst = {
 		target = target, targetCharacter = targetCharacter, targetPart = targetPart,
 		character = character, humanoid = humanoid, root = root, origin = root.CFrame,
-		started = os.clock(), phase = 0,
+		started = os.clock(), phase = 0, nextStep = 0,
+		camera = workspace.CurrentCamera,
+		cameraSubject = workspace.CurrentCamera and workspace.CurrentCamera.CameraSubject,
 		seated = humanoid:GetStateEnabled(Enum.HumanoidStateType.Seated), autoRotate = humanoid.AutoRotate,
 	}
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
@@ -666,6 +671,17 @@ local function startBurst(target, character, humanoid, root)
 		Name = "GeneralFlingVelocity", Velocity = Vector3.new(9e8, 9e8, 9e8),
 		MaxForce = Vector3.new(math.huge, math.huge, math.huge), P = 1250,
 	}, root)
+	if burst.camera then
+		burst.camera.CameraSubject = targetPart or targetHumanoid or humanoid
+	end
+end
+local function moveBurstCharacter(character, root, pivot)
+	root.CFrame = pivot
+	if character.PrimaryPart then
+		character:SetPrimaryPartCFrame(pivot)
+	else
+		character:PivotTo(pivot)
+	end
 end
 local function physicsStep()
 	local character, humanoid, root = characterParts(player)
@@ -676,31 +692,45 @@ local function physicsStep()
 		local targetPart = targetCharacter and (targetCharacter:FindFirstChild("Head") or targetRoot or handle)
 		if not flingRow.enabled or not root or root ~= burst.root or not targetRoot or not targetPart
 			or burst.target.Parent ~= Players or burst.target.Character ~= burst.targetCharacter
-			or targetHumanoid.Sit or os.clock() - burst.started >= 2 then
+			or targetHumanoid.Sit or targetPart.Velocity.Magnitude > 500
+			or os.clock() - burst.started >= 2 then
 			finishBurst()
-		else
-			-- Use the same contact cycle as mm2. Pivoting the whole character is
-			-- more reliable than moving only HumanoidRootPart in networked games.
+		elseif os.clock() >= burst.nextStep then
+			burst.nextStep = os.clock() + 0.03
 			burst.phase = burst.phase + 1
 			local phase = burst.phase
-			local velocity = targetPart.Velocity
-			if velocity.Magnitude < 50 then
-				local lead = targetHumanoid.MoveDirection * velocity.Magnitude / 1.25
-				local offsets = {
-					Vector3.new(0, 1.5, 0), Vector3.new(0, -1.5, 0),
-					Vector3.new(2.25, 1.5, -2.25), Vector3.new(-2.25, -1.5, 2.25),
-					Vector3.new(0, 1.5, 0), Vector3.new(0, -1.5, 0),
+			local moving = targetPart.Velocity.Magnitude >= 50
+			local pivot
+			if not moving then
+				local lead = targetHumanoid.MoveDirection * targetPart.Velocity.Magnitude / 1.25
+				local positions = {
+					{Vector3.new(0, 1.5, 0), CFrame.Angles(math.rad(phase * 100), 0, 0)},
+					{Vector3.new(0, -1.5, 0), CFrame.Angles(math.rad(phase * 100), 0, 0)},
+					{Vector3.new(2.25, 1.5, -2.25), CFrame.Angles(math.rad(phase * 100), 0, 0)},
+					{Vector3.new(-2.25, -1.5, 2.25), CFrame.Angles(math.rad(phase * 100), 0, 0)},
+					{Vector3.new(0, 1.5, 0), CFrame.Angles(math.rad(phase * 100), 0, 0)},
+					{Vector3.new(0, -1.5, 0), CFrame.Angles(math.rad(phase * 100), 0, 0)},
 				}
-				local offset = offsets[(phase - 1) % #offsets + 1]
-				local pivot = CFrame.new(targetPart.Position + offset + lead)
-					* CFrame.Angles(math.rad(phase * 100), 0, 0)
-				character:PivotTo(pivot)
+				local position = positions[(phase - 1) % #positions + 1]
+				pivot = CFrame.new(targetPart.Position + position[1] + lead) * position[2]
 			else
-				local offset = Vector3.new(0, phase % 2 == 0 and 1.5 or -1.5, targetHumanoid.WalkSpeed)
-				local pivot = CFrame.new(targetPart.Position + offset)
-					* CFrame.Angles(math.rad(90), 0, 0)
-				character:PivotTo(pivot)
+				local speed = targetPart.Velocity.Magnitude / 1.25
+				local positions = {
+					{Vector3.new(0, 1.5, targetHumanoid.WalkSpeed), CFrame.Angles(math.rad(90), 0, 0)},
+					{Vector3.new(0, -1.5, -targetHumanoid.WalkSpeed), CFrame.Angles(0, 0, 0)},
+					{Vector3.new(0, 1.5, targetHumanoid.WalkSpeed), CFrame.Angles(math.rad(90), 0, 0)},
+					{Vector3.new(0, 1.5, speed), CFrame.Angles(math.rad(90), 0, 0)},
+					{Vector3.new(0, -1.5, -speed), CFrame.Angles(0, 0, 0)},
+					{Vector3.new(0, 1.5, speed), CFrame.Angles(math.rad(90), 0, 0)},
+					{Vector3.new(0, -1.5, 0), CFrame.Angles(math.rad(90), 0, 0)},
+					{Vector3.new(0, -1.5, 0), CFrame.Angles(0, 0, 0)},
+					{Vector3.new(0, -1.5, 0), CFrame.Angles(math.rad(-90), 0, 0)},
+					{Vector3.new(0, -1.5, 0), CFrame.Angles(0, 0, 0)},
+				}
+				local position = positions[(phase - 1) % #positions + 1]
+				pivot = CFrame.new(targetPart.Position + position[1]) * position[2]
 			end
+			moveBurstCharacter(character, root, pivot)
 			root.Velocity = Vector3.new(9e7, 9e8, 9e7)
 			root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
 			root.AssemblyLinearVelocity = Vector3.new(9e7, 9e8, 9e7)
