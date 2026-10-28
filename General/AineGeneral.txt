@@ -456,9 +456,18 @@ local function finishBurst()
 	if not active then return end
 	burst = nil
 	if active.force then active.force:Destroy() end
+	if active.spin then active.spin:Destroy() end
 	if active.humanoid.Parent then
 		active.humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, active.seated)
 		active.humanoid.AutoRotate = active.autoRotate
+	end
+	if active.physical then
+		for part, state in pairs(active.physical) do
+			if part.Parent then
+				part.CustomPhysicalProperties = state.properties
+				part.Massless = state.massless
+			end
+		end
 	end
 	if active.camera and active.camera.Parent and active.cameraSubject then
 		active.camera.CameraSubject = active.cameraSubject
@@ -662,14 +671,27 @@ local function startBurst(target, character, humanoid, root)
 		started = os.clock(), phase = 0, nextStep = 0,
 		camera = workspace.CurrentCamera,
 		cameraSubject = workspace.CurrentCamera and workspace.CurrentCamera.CameraSubject,
+		physical = {},
 		seated = humanoid:GetStateEnabled(Enum.HumanoidStateType.Seated), autoRotate = humanoid.AutoRotate,
 	}
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") then
+			burst.physical[part] = {
+				properties = part.CustomPhysicalProperties,
+				massless = part.Massless,
+			}
+			part.CustomPhysicalProperties = PhysicalProperties.new(100, 0.3, 0.5)
+			part.Massless = true
+			part.Velocity = Vector3.zero
+			part.RotVelocity = Vector3.zero
+		end
+	end
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
 	humanoid.Sit = false
 	humanoid.AutoRotate = false
-	burst.force = make("BodyVelocity", {
-		Name = "GeneralFlingVelocity", Velocity = Vector3.new(9e8, 9e8, 9e8),
-		MaxForce = Vector3.new(math.huge, math.huge, math.huge), P = 1250,
+	burst.spin = make("BodyAngularVelocity", {
+		Name = "GeneralFlingSpin", AngularVelocity = Vector3.new(0, 99999, 0),
+		MaxTorque = Vector3.new(0, math.huge, 0), P = math.huge,
 	}, root)
 	if burst.camera then
 		burst.camera.CameraSubject = targetPart or targetHumanoid or humanoid
@@ -731,10 +753,8 @@ local function physicsStep()
 				pivot = CFrame.new(targetPart.Position + position[1]) * position[2]
 			end
 			moveBurstCharacter(character, root, pivot)
-			root.Velocity = Vector3.new(9e7, 9e8, 9e7)
-			root.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
-			root.AssemblyLinearVelocity = Vector3.new(9e7, 9e8, 9e7)
-			root.AssemblyAngularVelocity = Vector3.new(9e8, 9e8, 9e8)
+			root.RotVelocity = Vector3.new(0, 99999, 0)
+			root.AssemblyAngularVelocity = Vector3.new(0, 99999, 0)
 		end
 	end
 	if not root then stopFlight(); return end
