@@ -655,6 +655,15 @@ local function updateESP()
 	end
 end
 
+local function flingPart(character, root)
+	local head = character and character:FindFirstChild("Head")
+	if root and head and (root.Position - head.Position).Magnitude <= 5 then return root end
+	if head then return head end
+	if root then return root end
+	local accessory = character and character:FindFirstChildOfClass("Accessory")
+	return accessory and accessory:FindFirstChild("Handle")
+end
+
 local function startBurst(target, character, humanoid, root)
 	stopFlight()
 	restoreCollisions()
@@ -662,9 +671,7 @@ local function startBurst(target, character, humanoid, root)
 	local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
 	local targetRoot = targetCharacter and (targetHumanoid and targetHumanoid.RootPart
 		or targetCharacter:FindFirstChild("HumanoidRootPart"))
-	local accessory = targetCharacter and targetCharacter:FindFirstChildOfClass("Accessory")
-	local handle = accessory and accessory:FindFirstChild("Handle")
-	local targetPart = targetCharacter and (targetCharacter:FindFirstChild("Head") or targetRoot or handle)
+	local targetPart = flingPart(targetCharacter, targetRoot)
 	burst = {
 		target = target, targetCharacter = targetCharacter, targetPart = targetPart,
 		character = character, humanoid = humanoid, root = root, origin = root.CFrame,
@@ -709,9 +716,7 @@ local function physicsStep()
 	local character, humanoid, root = characterParts(player)
 	if burst then
 		local targetCharacter, targetHumanoid, targetRoot = characterParts(burst.target)
-		local accessory = targetCharacter and targetCharacter:FindFirstChildOfClass("Accessory")
-		local handle = accessory and accessory:FindFirstChild("Handle")
-		local targetPart = targetCharacter and (targetCharacter:FindFirstChild("Head") or targetRoot or handle)
+		local targetPart = flingPart(targetCharacter, targetRoot)
 		if not flingRow.enabled or not root or root ~= burst.root or not targetRoot or not targetPart
 			or burst.target.Parent ~= Players or burst.target.Character ~= burst.targetCharacter
 			or targetHumanoid.Sit or targetPart.Velocity.Magnitude > 500
