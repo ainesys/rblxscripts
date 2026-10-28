@@ -457,6 +457,7 @@ local function finishBurst()
 	burst = nil
 	if active.force then active.force:Destroy() end
 	if active.spin then active.spin:Destroy() end
+	if active.thrust then active.thrust:Destroy() end
 	if active.humanoid.Parent then
 		active.humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, active.seated)
 		active.humanoid.AutoRotate = active.autoRotate
@@ -700,6 +701,10 @@ local function startBurst(target, character, humanoid, root)
 		Name = "GeneralFlingSpin", AngularVelocity = Vector3.new(0, 99999, 0),
 		MaxTorque = Vector3.new(0, math.huge, 0), P = math.huge,
 	}, root)
+	burst.thrust = make("BodyThrust", {
+		Name = "GeneralFlingThrust", Force = Vector3.new(9e9, 0, 9e9),
+		Location = root.Position,
+	}, root)
 	if burst.camera then
 		burst.camera.CameraSubject = targetPart or targetHumanoid or humanoid
 	end
@@ -726,6 +731,14 @@ local function physicsStep()
 			burst.nextStep = os.clock() + 0.03
 			burst.phase = burst.phase + 1
 			local phase = burst.phase
+			if phase % 4 == 1 then
+				-- The far pulse is the part used by the classic invis-fling
+				-- routines to build momentum before restoring contact position.
+				moveBurstCharacter(character, root, root.CFrame + Vector3.new(0, 9999, 0))
+				root.RotVelocity = Vector3.new(0, 99999, 0)
+				root.AssemblyAngularVelocity = Vector3.new(0, 99999, 0)
+				return
+			end
 			local moving = targetPart.Velocity.Magnitude >= 50
 			local pivot
 			if not moving then
