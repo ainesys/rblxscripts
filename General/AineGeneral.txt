@@ -5,6 +5,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Stats = game:GetService("Stats")
+local Lighting = game:GetService("Lighting")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local previous = playerGui:FindFirstChild("AineGeneral")
@@ -17,6 +18,7 @@ local connections, collisionState, espObjects = {}, {}, {}
 local closed, minimized = false, false
 local antiFling, noclip, esp = false, false, false
 local fly, flight = false, nil
+local fullBright, lightingState = false, {}
 local aimTarget, aimLocked, aimExpanded = nil, false, false
 local aimFrameTime, aimPing, nextAimReacquire, nextAimPing = 1 / 60, 0.08, 0, 0
 local savedTP, tpGesture, tpFlashUntil = nil, nil, 0
@@ -71,7 +73,7 @@ minimize.TextSize = 11
 close.TextSize = 11
 local left = make("Frame", {
 	Name = "Targets", BackgroundTransparency = 1, Position = UDim2.fromOffset(20, 60),
-	Size = UDim2.fromOffset(210, 134),
+	Size = UDim2.fromOffset(140, 30),
 }, surface)
 local right = make("Frame", {
 	Name = "QuickToggles", BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0),
@@ -82,11 +84,11 @@ local function paintToggle(toggle, enabled)
 	toggle.BackgroundColor3 = enabled and colors.accent or colors.off
 	toggle.TextColor3 = enabled and colors.panel or colors.text
 end
-local function targetRow(name, y)
+local function targetRow(parent, name, y)
 	local card = make("Frame", {
 		Name = name, BackgroundTransparency = 1, BorderSizePixel = 0,
 		Position = UDim2.fromOffset(0, y), Size = UDim2.new(1, 0, 0, 64),
-	}, left)
+	}, parent)
 	round(card)
 	local heading = label(card, name, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 16), 11)
 	heading.TextStrokeTransparency = 0.25
@@ -108,8 +110,6 @@ local function targetRow(name, y)
 	status.TextTruncate = Enum.TextTruncate.AtEnd
 	return {input = input, toggle = toggle, status = status, enabled = false, target = nil}
 end
-tpRow = targetRow("Loop TP", 0)
-flingRow = targetRow("Loop Fling", 70)
 local function quickToggle(text, y, callback, isMapButton, xOffset)
 	local control = button(right, "", UDim2.fromOffset(xOffset or (isMapButton and 0 or 90), y), UDim2.fromOffset(80, 34))
 	control.Name = text == "Anti Fling" and "AntiFlingQuickSwitch" or text .. "QuickSwitch"
@@ -195,40 +195,88 @@ end
 -- Compact, universal camera aim lock. Weapon-specific remote rewriting ("silent
 -- aim") differs between games, so this stays compatible by controlling the camera.
 aimPanel = make("Frame", {
-	Name = "AimLock", BackgroundColor3 = colors.panel, BorderSizePixel = 0,
-	Position = UDim2.fromOffset(8, 48), Size = UDim2.fromOffset(220, 34),
+	Name = "TargetControls", BackgroundColor3 = colors.panel, BorderSizePixel = 0,
+	Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(140, 30),
 	ClipsDescendants = true, ZIndex = 20,
-}, surface)
+}, left)
 round(aimPanel, 9)
 make("UIStroke", {Color = colors.off, Thickness = 1}, aimPanel)
-aimHeader = button(aimPanel, "AIM LOCK  ▼", UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 34))
-aimHeader.Name = "AimDropdown"
+aimHeader = button(aimPanel, "TARGETS  ▼", UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 30))
+aimHeader.Name = "TargetsDropdown"
 aimHeader.BackgroundColor3 = colors.panel
 aimHeader.TextSize = 12
 aimHeader.ZIndex = 22
 aimBody = make("Frame", {
-	Name = "Contents", BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 34),
-	Size = UDim2.new(1, 0, 0, 120), Visible = false, ZIndex = 21,
+	Name = "Contents", BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 30),
+	Size = UDim2.new(1, 0, 0, 266), Visible = false, ZIndex = 21,
 }, aimPanel)
 aimInput = make("TextBox", {
 	Name = "Username", BackgroundColor3 = colors.field, BorderSizePixel = 0,
 	Position = UDim2.fromOffset(8, 8), Size = UDim2.new(1, -16, 0, 30),
-	Text = "", PlaceholderText = "Username (blank = look target)", ClearTextOnFocus = false,
+	Text = "", PlaceholderText = "Aim: name / blank = look", ClearTextOnFocus = false,
 	Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = colors.text,
 	PlaceholderColor3 = colors.muted, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 22,
 }, aimBody)
 make("UIPadding", {PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, aimInput)
 round(aimInput, 7)
-local aimLookButton = button(aimBody, "LOCK LOOK", UDim2.fromOffset(8, 46), UDim2.fromOffset(98, 30))
+local aimLookButton = button(aimBody, "LOCK LOOK", UDim2.fromOffset(8, 46), UDim2.new(0.5, -12, 0, 30))
 aimLookButton.TextSize = 10
 aimLookButton.ZIndex = 22
-aimLockButton = button(aimBody, "LOCK", UDim2.new(1, -106, 0, 46), UDim2.fromOffset(98, 30))
+aimLockButton = button(aimBody, "LOCK", UDim2.new(0.5, 4, 0, 46), UDim2.new(0.5, -12, 0, 30))
 aimLockButton.TextSize = 10
 aimLockButton.ZIndex = 22
 aimStatus = label(aimBody, "Prediction: ping + FPS", UDim2.fromOffset(8, 82), UDim2.new(1, -16, 0, 28), 10)
 aimStatus.TextColor3 = colors.muted
 aimStatus.TextTruncate = Enum.TextTruncate.AtEnd
 aimStatus.ZIndex = 22
+
+local targetRows = make("Frame", {
+	Name = "TeleportAndFling", BackgroundTransparency = 1,
+	Position = UDim2.fromOffset(8, 122), Size = UDim2.new(1, -16, 0, 134), ZIndex = 22,
+}, aimBody)
+tpRow = targetRow(targetRows, "Loop TP", 0)
+flingRow = targetRow(targetRows, "Loop Fling", 70)
+
+local brightButton = button(left, "FULL BRIGHT: OFF", UDim2.fromOffset(148, 0), UDim2.fromOffset(124, 30))
+brightButton.TextSize = 10
+local brightValues = {
+	Brightness = 2, ClockTime = 14, GlobalShadows = false,
+	Ambient = Color3.new(1, 1, 1), OutdoorAmbient = Color3.new(1, 1, 1),
+	FogStart = 0, FogEnd = 1000000, ExposureCompensation = 0,
+}
+local function overrideLighting(object, values)
+	local saved = lightingState[object]
+	if not saved then saved = {}; lightingState[object] = saved end
+	for property, value in pairs(values) do
+		if saved[property] == nil then saved[property] = object[property] end
+		if object[property] ~= value then object[property] = value end
+	end
+end
+local function applyFullBright()
+	overrideLighting(Lighting, brightValues)
+	for _, object in ipairs(Lighting:GetDescendants()) do
+		if object:IsA("Atmosphere") then
+			overrideLighting(object, {Density = 0, Haze = 0, Glare = 0})
+		elseif object:IsA("PostEffect") then
+			overrideLighting(object, {Enabled = false})
+		end
+	end
+end
+local function restoreLighting()
+	for object, values in pairs(lightingState) do
+		if object == Lighting or object.Parent then
+			for property, value in pairs(values) do object[property] = value end
+		end
+	end
+	table.clear(lightingState)
+end
+connect(brightButton.Activated, function()
+	fullBright = not fullBright
+	if fullBright then applyFullBright() else restoreLighting() end
+	brightButton.Text = fullBright and "FULL BRIGHT: ON" or "FULL BRIGHT: OFF"
+	brightButton.BackgroundColor3 = fullBright and colors.accent or colors.panel
+	brightButton.TextColor3 = fullBright and colors.panel or colors.text
+end)
 
 local function targetLabel(target)
 	if not target then return "target" end
@@ -238,7 +286,7 @@ local function paintAim()
 	aimLockButton.Text = aimLocked and "UNLOCK" or "LOCK"
 	aimLockButton.BackgroundColor3 = aimLocked and colors.accent or colors.off
 	aimLockButton.TextColor3 = aimLocked and colors.panel or colors.text
-	aimHeader.Text = (aimLocked and "AIM: " .. targetLabel(aimTarget) or "AIM LOCK")
+	aimHeader.Text = (aimLocked and "TARGETS [AIM]" or "TARGETS")
 		.. (aimExpanded and "  ▲" or "  ▼")
 end
 local function setAimTarget(target, lockNow)
@@ -305,7 +353,12 @@ end
 connect(aimHeader.Activated, function()
 	aimExpanded = not aimExpanded
 	aimBody.Visible = aimExpanded
-	aimPanel.Size = UDim2.fromOffset(220, aimExpanded and 154 or 34)
+	aimPanel.Size = UDim2.fromOffset(aimExpanded and 200 or 140, aimExpanded and 296 or 30)
+	if surface.AbsoluteSize.X < 360 then
+		brightButton.Position = UDim2.fromOffset(0, aimExpanded and 304 or 38)
+	else
+		brightButton.Position = UDim2.fromOffset(aimExpanded and 208 or 148, 0)
+	end
 	paintAim()
 end)
 connect(aimLookButton.Activated, function()
@@ -816,6 +869,8 @@ local function cleanup()
 	stopFlight()
 	restoreCollisions()
 	clearESP()
+	fullBright = false
+	restoreLighting()
 	gui:Destroy()
 end
 shutdown.OnInvoke = cleanup
@@ -831,8 +886,12 @@ connect(minimize.Activated, function()
 end)
 local function layout()
 	local width = surface.AbsoluteSize.X
-	left.Size = UDim2.fromOffset(math.min(210, math.max(140, width - 140)), 134)
-	left.Position = UDim2.fromOffset(20, width < 440 and 144 or 94)
+	left.Position = UDim2.fromOffset(8, width < 440 and 144 or 48)
+	if width < 360 then
+		brightButton.Position = UDim2.fromOffset(0, aimExpanded and 304 or 38)
+	else
+		brightButton.Position = UDim2.fromOffset(aimExpanded and 208 or 148, 0)
+	end
 end
 connect(surface:GetPropertyChangedSignal("AbsoluteSize"), layout)
 layout()
@@ -863,6 +922,7 @@ connect(RunService.Stepped, function()
 end)
 connect(RunService.Heartbeat, function(dt)
 	if closed then return end
+	if fullBright then applyFullBright() end
 	if tpFlashUntil > 0 and os.clock() >= tpFlashUntil then
 		teleportButton.Text = savedTP and "TP" or "SET TP"
 		tpFlashUntil = 0
