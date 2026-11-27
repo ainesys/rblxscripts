@@ -1,0 +1,19 @@
+.env
+.env.*
+!.env.example
+*.local
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
+.DS_Store
+credentials*.json
+secrets*.json
+
+# Personal reference images
+/mm2/AineHub-MM2-guide*.png
+/mm2/AineHub-MM2-commands*.png
